@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -21,6 +21,7 @@ from app.schemas.templates import (
     TemplateFieldUpdate,
     TemplateFieldOut,
 )
+from app.services.ocr.template_gen import TemplateGenerator
 
 router = APIRouter(prefix="/orgs", tags=["ocr"])
 
@@ -96,6 +97,113 @@ def create_template(org_id: str, payload: TemplateCreate, db: Session = Depends(
         created_by_id=str(t.created_by_id),
         created_at=t.created_at,
         updated_at=t.updated_at,
+    )
+
+
+@router.post("/{org_id}/ocr/templates/generate", response_model=TemplateDetailOut, status_code=201)
+async def generate_template_from_pdf(
+    org_id: str,
+    pdf: UploadFile = File(...),
+    name: str | None = Form(default=None),
+    description: str | None = Form(default=""),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    org_uuid = _parse_uuid(org_id, "org id")
+
+    # Permission check
+    require_permission(db, user, org_uuid, "org.manage")
+
+    org = db.query(Organization).filter(Organization.id == org_uuid).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    if not pdf or not pdf.filename:
+        raise HTTPException(status_code=400, detail="PDF file is required")
+    if (pdf.content_type or "").lower() != "application/pdf" and not pdf.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    data = await pdf.read()
+    try:
+        gen = TemplateGenerator()
+        result = gen.generate(pdf_bytes=data, content_type=pdf.content_type or "application/pdf")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Template generation failed: {e}")
+
+    # Determine template name
+    tpl_name = (name or pdf.filename.rsplit(".", 1)[0]).strip()[:200]
+    if not tpl_name:
+        tpl_name = "Generated Template"
+
+    # Ensure unique name per org
+    base_name = tpl_name
+    suffix = 1
+    while db.query(DocumentTemplate).filter(DocumentTemplate.org_id == org_uuid, DocumentTemplate.name == tpl_name).first():
+        tpl_name = f"{base_name} ({suffix})"
+        suffix += 1
+
+    # Create template
+    t = DocumentTemplate(org_id=org_uuid, name=tpl_name, description=(description or "")[:500], created_by_id=user.id)
+    db.add(t)
+    db.flush()
+
+    # Create fields
+    fields = result.get("fields") or []
+    order = 1
+    for f in fields:
+        fname = str(f.get("name") or "").strip()[:100]
+        flabel = str(f.get("label") or fname).strip()[:200]
+        ftype = str(f.get("field_type") or "string").strip()[:50]
+        freq = bool(f.get("required") or False)
+        fdesc = str(f.get("description") or "").strip()[:500]
+        if not fname:
+            continue
+        rec = DocumentTemplateField(
+            template_id=t.id,
+            name=fname,
+            label=flabel,
+            field_type=ftype,
+            required=freq,
+            description=fdesc,
+            order_index=order,
+        )
+        db.add(rec)
+        order += 1
+
+    db.commit()
+    db.refresh(t)
+
+    # Load created fields ordered
+    created_fields = (
+        db.query(DocumentTemplateField)
+        .filter(DocumentTemplateField.template_id == t.id)
+        .order_by(DocumentTemplateField.order_index.asc(), DocumentTemplateField.created_at.asc())
+        .all()
+    )
+
+    return TemplateDetailOut(
+        id=str(t.id),
+        org_id=str(t.org_id),
+        name=t.name,
+        description=t.description,
+        created_by_id=str(t.created_by_id),
+        created_at=t.created_at,
+        updated_at=t.updated_at,
+        fields=[
+            TemplateFieldOut(
+                id=str(f.id),
+                template_id=str(f.template_id),
+                name=f.name,
+                label=f.label,
+                field_type=f.field_type,
+                required=f.required,
+                description=f.description,
+                order_index=f.order_index,
+                created_at=f.created_at,
+                updated_at=f.updated_at,
+            )
+            for f in created_fields
+        ],
     )
 
 
