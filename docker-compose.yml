@@ -1,0 +1,29 @@
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      ENVIRONMENT: prod
+      DATABASE_URL: ${DATABASE_URL}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+      APP_URL: ${APP_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRES_MINUTES: "60"
+      RUSTFS_BASE_URL: ${RUSTFS_BASE_URL}
+      RUSTFS_API_KEY: ${RUSTFS_API_KEY}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
+      UVICORN_HOST: 0.0.0.0
+      UVICORN_PORT: "8060"
+      UVICORN_LOG_LEVEL: info
+      # UVICORN_WORKERS: "2"  # uncomment to enable multiple workers
+    ports:
+      - "8060:8060"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8060/api/v1/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
