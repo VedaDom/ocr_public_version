@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     resend_api_key: Optional[str] = None
     resend_from_email: Optional[str] = None
 
+    # Gemini
+    gemini_api_key: Optional[str] = None
+
     # App URLs
     app_url: str = "http://localhost:3000"
 

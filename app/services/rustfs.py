@@ -46,6 +46,31 @@ class RustFSClient:
         await run_in_threadpool(_put)
         return self._object_url(key)
 
+    def _parse_path_from_url(self, url: str) -> tuple[str, str]:
+        # Expect path-style URL: {base}/{bucket}/{key}
+        if not url.startswith(self.base_url):
+            raise ValueError("URL does not match RustFS base URL")
+        path = url[len(self.base_url):].lstrip("/")
+        parts = path.split("/", 1)
+        if len(parts) != 2:
+            raise ValueError("Invalid RustFS URL path")
+        bucket, key = parts[0], parts[1]
+        return bucket, key
+
+    async def download_by_url(self, url: str) -> bytes:
+        bucket, key = self._parse_path_from_url(url)
+
+        def _get() -> bytes:
+            obj = self._s3.get_object(Bucket=bucket, Key=key)
+            return obj["Body"].read()
+
+        return await run_in_threadpool(_get)
+
+    def download_by_url_sync(self, url: str) -> bytes:
+        bucket, key = self._parse_path_from_url(url)
+        obj = self._s3.get_object(Bucket=bucket, Key=key)
+        return obj["Body"].read()
+
     async def generate_presigned_get_url(self, key: str, expires_in: int = 3600) -> str:
         def _sign() -> str:
             return self._s3.generate_presigned_url(

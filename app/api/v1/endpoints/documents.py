@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
@@ -21,6 +22,8 @@ from app.schemas.documents import (
     DocumentBatchOut,
 )
 from app.services.rustfs import get_rustfs_client
+from app.services.ocr.pipeline import process_ocr_job
+from pypdf import PdfReader, PdfWriter
 
 router = APIRouter(prefix="/orgs", tags=["ocr"])
 
@@ -33,25 +36,7 @@ def _parse_uuid(id_str: str, what: str) -> uuid.UUID:
 
 
 def _start_ocr_job(job_id: uuid.UUID) -> None:
-    db = SessionLocal()
-    try:
-        job = db.query(OcrJob).filter(OcrJob.id == job_id).first()
-        if not job:
-            return
-        # Only transition queued -> running for now
-        if hasattr(OcrJob, "Status"):
-            if job.status != OcrJob.Status.queued:
-                return
-            job.status = OcrJob.Status.running
-        else:
-            if str(job.status) != "queued":
-                return
-            job.status = "running"
-        job.started_at = datetime.now(timezone.utc)
-        db.add(job)
-        db.commit()
-    finally:
-        db.close()
+    process_ocr_job(job_id)
 
 
 @router.post("/{org_id}/ocr/documents", response_model=DocumentUploadResponse, status_code=201)
@@ -103,8 +88,50 @@ async def register_document(
 
     for f in files:
         data = await f.read()
-        url = await rustfs.upload_file(data, f.filename, f.content_type)
-        doc = Document(org_id=org_uuid, uploaded_by_id=user.id, url=url, batch_id=(batch.id if batch else None))
+        filename = f.filename or "upload"
+        ct = f.content_type or "application/octet-stream"
+
+        is_pdf = ct == "application/pdf" or filename.lower().endswith(".pdf")
+        if is_pdf:
+            reader = PdfReader(io.BytesIO(data))
+            num_pages = len(reader.pages)
+            if num_pages > 1:
+                group_uuid = uuid.uuid4()
+                for idx in range(num_pages):
+                    writer = PdfWriter()
+                    writer.add_page(reader.pages[idx])
+                    buf = io.BytesIO()
+                    writer.write(buf)
+                    page_bytes = buf.getvalue()
+                    page_name = filename.rsplit(".", 1)[0] + f"_page_{idx+1}.pdf"
+                    url = await rustfs.upload_file(page_bytes, page_name, "application/pdf")
+                    doc = Document(
+                        org_id=org_uuid,
+                        uploaded_by_id=user.id,
+                        url=url,
+                        batch_id=(batch.id if batch else None),
+                        group_id=group_uuid,
+                        page_number=idx + 1,
+                    )
+                    db.add(doc)
+                    db.flush()
+                    created_docs.append(doc)
+
+                    job = OcrJob(org_id=org_uuid, document_id=doc.id, template_id=tpl_id, started_by_id=user.id)
+                    db.add(job)
+                    db.flush()
+                    created_jobs.append(job)
+                continue  # handled multi-page PDF
+
+        # Single-page (PDF or image/other)
+        url = await rustfs.upload_file(data, filename, ct)
+        doc = Document(
+            org_id=org_uuid,
+            uploaded_by_id=user.id,
+            url=url,
+            batch_id=(batch.id if batch else None),
+            page_number=1,
+        )
         db.add(doc)
         db.flush()
         created_docs.append(doc)
