@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-set -euo pipefail
+set -eu
 
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 
