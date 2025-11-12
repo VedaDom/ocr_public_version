@@ -32,10 +32,17 @@ class Settings(BaseSettings):
     jwt_expires_minutes: int = 60
     refresh_expires_days: int = 30
 
+    # Runtime (Uvicorn)
+    uvicorn_host: str | None = None
+    uvicorn_port: int | None = None
+    uvicorn_log_level: str | None = None
+    uvicorn_workers: int | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
 
