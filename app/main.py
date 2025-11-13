@@ -7,6 +7,9 @@ from app.middleware.api_key import ApiKeyAuthMiddleware
 
 from app.core.config import get_settings
 from app.infrastructure.db import SessionLocal
+from app.domain.models.organization import Organization
+from app.domain.models.role import Role
+from app.domain.models.membership import Membership
 from app.api.v1.router import api_router
 
 settings = get_settings()
@@ -75,6 +78,32 @@ def backfill_org_credits_on_startup() -> None:
     finally:
         db.close()
 
+
+@app.on_event("startup")
+def backfill_owner_memberships_on_startup() -> None:
+    db = SessionLocal()
+    try:
+        orgs = db.query(Organization).all()
+        for org in orgs:
+            if not getattr(org, "owner_id", None):
+                continue
+            owner_role = db.query(Role).filter(Role.org_id == org.id, Role.name == "OWNER").first()
+            if not owner_role:
+                owner_role = Role(org_id=org.id, name="OWNER", description="Organization owner")
+                db.add(owner_role)
+                db.flush()
+            exists = (
+                db.query(Membership)
+                .filter(Membership.user_id == org.owner_id, Membership.org_id == org.id)
+                .first()
+            )
+            if not exists:
+                db.add(Membership(user_id=org.owner_id, org_id=org.id, role_id=owner_role.id))
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 @app.get("/")
 def root():
