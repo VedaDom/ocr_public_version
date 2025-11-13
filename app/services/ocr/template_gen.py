@@ -16,7 +16,7 @@ class TemplateGenerator:
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY not configured")
         self._client = genai.Client(api_key=settings.gemini_api_key)
-        self._model = "gemini-flash-lite-latest"
+        self._model = "gemini-2.5-pro"
 
     def _sanitize_name(self, s: str) -> str:
         s = s.strip().lower()
