@@ -19,6 +19,7 @@ from app.infrastructure.db import get_db
 from app.schemas.orgs import OrgCreate, OrgOut
 from app.schemas.credits import TopUpRequest, BalanceResponse
 from app.schemas.members import MemberOut, MemberAddRequest, MemberUpdateRequest
+from app.services.credits import refund
 
 router = APIRouter(prefix="/orgs", tags=["orgs"])
 
@@ -77,8 +78,8 @@ def create_org(payload: OrgCreate, db: Session = Depends(get_db), user: User = D
     db.add(member)
 
     if existing_owned == 0:
-        grant = CreditsLedger(org_id=org.id, delta=30, reason="trial_grant")
-        db.add(grant)
+        # Seed initial trial credits and keep org_credits in sync
+        refund(db, org.id, 30, reason="trial_grant", idempotency_key=f"org:{org.id}:trial")
 
     db.commit()
 
@@ -303,9 +304,8 @@ def credits_topup(org_id: str, payload: TopUpRequest, db: Session = Depends(get_
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
-    entry = CreditsLedger(org_id=org_uuid, delta=int(payload.amount), reason=payload.reason or "topup")
-    db.add(entry)
-    db.commit()
+    # Apply top-up through credits service to update both ledger and org_credits
+    refund(db, org_uuid, int(payload.amount), reason=payload.reason or "topup")
 
     balance = (
         db.query(func.coalesce(func.sum(CreditsLedger.delta), 0)).filter(CreditsLedger.org_id == org_uuid).scalar()
