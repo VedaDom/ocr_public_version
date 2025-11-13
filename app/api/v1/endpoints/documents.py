@@ -327,6 +327,8 @@ def list_extracted_fields(org_id: str, document_id: str, db: Session = Depends(g
                 user_id=(str(ef.user_id) if ef.user_id else None),
                 extracted_value=ef.extracted_value,
                 value=ef.value,
+                field_name=_fld.name,
+                field_label=_fld.label,
                 created_at=ef.created_at,
                 updated_at=ef.updated_at,
             )
@@ -353,6 +355,7 @@ def get_extracted_field(org_id: str, document_id: str, field_id: str, db: Sessio
     if not ef:
         raise HTTPException(status_code=404, detail="Field not found")
 
+    fld = db.query(DocumentTemplateField).filter(DocumentTemplateField.id == ef.template_field_id).first()
     return ExtractedFieldOut(
         id=str(ef.id),
         document_id=str(ef.document_id),
@@ -360,6 +363,8 @@ def get_extracted_field(org_id: str, document_id: str, field_id: str, db: Sessio
         user_id=(str(ef.user_id) if ef.user_id else None),
         extracted_value=ef.extracted_value,
         value=ef.value,
+        field_name=(fld.name if fld else ""),
+        field_label=(fld.label if fld else ""),
         created_at=ef.created_at,
         updated_at=ef.updated_at,
     )
@@ -405,6 +410,7 @@ def upsert_extracted_field(org_id: str, document_id: str, payload: ExtractedFiel
         db.add(existing)
         db.commit()
         db.refresh(existing)
+        fld_row = db.query(DocumentTemplateField).filter(DocumentTemplateField.id == tf_uuid).first()
         return ExtractedFieldOut(
             id=str(existing.id),
             document_id=str(existing.document_id),
@@ -412,6 +418,8 @@ def upsert_extracted_field(org_id: str, document_id: str, payload: ExtractedFiel
             user_id=(str(existing.user_id) if existing.user_id else None),
             extracted_value=existing.extracted_value,
             value=existing.value,
+            field_name=(fld_row.name if fld_row else ""),
+            field_label=(fld_row.label if fld_row else ""),
             created_at=existing.created_at,
             updated_at=existing.updated_at,
         )
@@ -426,6 +434,7 @@ def upsert_extracted_field(org_id: str, document_id: str, payload: ExtractedFiel
     db.add(ef)
     db.commit()
     db.refresh(ef)
+    fld_row = db.query(DocumentTemplateField).filter(DocumentTemplateField.id == ef.template_field_id).first()
     return ExtractedFieldOut(
         id=str(ef.id),
         document_id=str(ef.document_id),
@@ -433,6 +442,8 @@ def upsert_extracted_field(org_id: str, document_id: str, payload: ExtractedFiel
         user_id=(str(ef.user_id) if ef.user_id else None),
         extracted_value=ef.extracted_value,
         value=ef.value,
+        field_name=(fld_row.name if fld_row else ""),
+        field_label=(fld_row.label if fld_row else ""),
         created_at=ef.created_at,
         updated_at=ef.updated_at,
     )
@@ -465,6 +476,7 @@ def update_extracted_field(org_id: str, document_id: str, field_id: str, payload
     db.add(ef)
     db.commit()
     db.refresh(ef)
+    fld_row = db.query(DocumentTemplateField).filter(DocumentTemplateField.id == ef.template_field_id).first()
     return ExtractedFieldOut(
         id=str(ef.id),
         document_id=str(ef.document_id),
@@ -472,6 +484,8 @@ def update_extracted_field(org_id: str, document_id: str, field_id: str, payload
         user_id=(str(ef.user_id) if ef.user_id else None),
         extracted_value=ef.extracted_value,
         value=ef.value,
+        field_name=(fld_row.name if fld_row else ""),
+        field_label=(fld_row.label if fld_row else ""),
         created_at=ef.created_at,
         updated_at=ef.updated_at,
     )

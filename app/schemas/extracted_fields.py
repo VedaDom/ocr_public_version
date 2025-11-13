@@ -22,5 +22,7 @@ class ExtractedFieldOut(BaseModel):
     user_id: str | None
     extracted_value: str
     value: str
+    field_name: str
+    field_label: str
     created_at: datetime
     updated_at: datetime
