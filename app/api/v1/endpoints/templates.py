@@ -114,8 +114,10 @@ async def generate_template_from_pdf(
 ):
     org_uuid = _parse_uuid(org_id, "org id")
 
-    # Permission check
-    require_permission(db, user, org_uuid, "org.manage")
+    # Allow any member to generate templates
+    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this org")
 
     org = db.query(Organization).filter(Organization.id == org_uuid).first()
     if not org:
