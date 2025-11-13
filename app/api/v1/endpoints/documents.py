@@ -35,6 +35,14 @@ def _parse_uuid(id_str: str, what: str) -> uuid.UUID:
         raise HTTPException(status_code=400, detail=f"Invalid {what}")
 
 
+def _is_member_or_owner(db: Session, org_uuid: uuid.UUID, user_id: uuid.UUID) -> bool:
+    member = db.query(Membership).filter(Membership.user_id == user_id, Membership.org_id == org_uuid).first()
+    if member:
+        return True
+    org = db.query(Organization).filter(Organization.id == org_uuid).first()
+    return bool(org and org.owner_id == user_id)
+
+
 def _start_ocr_job(job_id: uuid.UUID) -> None:
     process_ocr_job(job_id)
 
@@ -50,9 +58,8 @@ async def register_document(
 ):
     org_uuid = _parse_uuid(org_id, "org id")
 
-    # Must be a member to register a document
-    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
-    if not member:
+    # Must be a member (or owner) to register a document
+    if not _is_member_or_owner(db, org_uuid, user.id):
         raise HTTPException(status_code=403, detail="Not a member of this org")
 
     org = db.query(Organization).filter(Organization.id == org_uuid).first()
@@ -183,9 +190,8 @@ async def register_document(
 def list_documents(org_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_uuid = _parse_uuid(org_id, "org id")
 
-    # Must be a member to list
-    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
-    if not member:
+    # Must be a member (or owner) to list
+    if not _is_member_or_owner(db, org_uuid, user.id):
         raise HTTPException(status_code=403, detail="Not a member of this org")
 
     rows = db.query(Document).filter(Document.org_id == org_uuid).order_by(Document.created_at.desc()).all()
@@ -207,9 +213,8 @@ def get_batch(org_id: str, batch_id: str, db: Session = Depends(get_db), user: U
     org_uuid = _parse_uuid(org_id, "org id")
     batch_uuid = _parse_uuid(batch_id, "batch id")
 
-    # Must be a member to view
-    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
-    if not member:
+    # Must be a member (or owner) to view
+    if not _is_member_or_owner(db, org_uuid, user.id):
         raise HTTPException(status_code=403, detail="Not a member of this org")
 
     batch = (
@@ -261,14 +266,13 @@ def get_batch(org_id: str, batch_id: str, db: Session = Depends(get_db), user: U
     )
 
 
-@router.get("/{org_id}/ocr/ocr/jobs/{job_id}", response_model=OcrJobOut)
+@router.get("/{org_id}/ocr/jobs/{job_id}", response_model=OcrJobOut)
 def get_job(org_id: str, job_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     org_uuid = _parse_uuid(org_id, "org id")
     job_uuid = _parse_uuid(job_id, "job id")
 
-    # Must be a member to view
-    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
-    if not member:
+    # Must be a member (or owner) to view
+    if not _is_member_or_owner(db, org_uuid, user.id):
         raise HTTPException(status_code=403, detail="Not a member of this org")
 
     job = db.query(OcrJob).filter(OcrJob.id == job_uuid, OcrJob.org_id == org_uuid).first()
