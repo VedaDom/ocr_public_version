@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Gemini
     gemini_api_key: Optional[str] = None
 
+    # Google OAuth
+    google_client_id: Optional[str] = None
+
     # App URLs
     app_url: str = "http://localhost:3000"
 
@@ -37,6 +40,10 @@ class Settings(BaseSettings):
     uvicorn_port: int | None = None
     uvicorn_log_level: str | None = None
     uvicorn_workers: int | None = None
+
+    # Pricing
+    ocr_page_cost: int = 1
+    template_gen_cost: int = 1
 
     model_config = SettingsConfigDict(
         env_file=".env",

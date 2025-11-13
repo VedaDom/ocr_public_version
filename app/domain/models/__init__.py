@@ -2,6 +2,7 @@ from .user import User
 from .membership import Membership
 from .organization import Organization
 from .credit import CreditsLedger
+from .org_credits import OrgCredits
 from .email_login_token import EmailLoginToken
 from .role import Role
 from .permission import Permission
@@ -21,6 +22,7 @@ __all__ = [
     "Membership",
     "Organization",
     "CreditsLedger",
+    "OrgCredits",
     "EmailLoginToken",
     "Role",
     "Permission",

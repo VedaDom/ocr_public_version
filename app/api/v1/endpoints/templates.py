@@ -22,6 +22,8 @@ from app.schemas.templates import (
     TemplateFieldOut,
 )
 from app.services.ocr.template_gen import TemplateGenerator
+from app.core.config import get_settings
+from app.services.credits import debit_if_possible, refund, InsufficientCreditsError
 
 router = APIRouter(prefix="/orgs", tags=["ocr"])
 
@@ -106,6 +108,7 @@ async def generate_template_from_pdf(
     pdf: UploadFile = File(...),
     name: str | None = Form(default=None),
     description: str | None = Form(default=""),
+    idempotency_key: str | None = Form(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -124,10 +127,38 @@ async def generate_template_from_pdf(
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
     data = await pdf.read()
+
+    # Atomic debit with idempotency
+    amount = int(get_settings().template_gen_cost)
+    debited = False
+    try:
+        res = debit_if_possible(
+            db,
+            org_uuid,
+            amount,
+            reason="template_gen",
+            idempotency_key=(f"template_gen:{idempotency_key}" if idempotency_key else None),
+        )
+        debited = not res.already_processed
+    except InsufficientCreditsError:
+        raise HTTPException(status_code=402, detail="insufficient credits")
+
     try:
         gen = TemplateGenerator()
         result = gen.generate(pdf_bytes=data, content_type=pdf.content_type or "application/pdf")
     except Exception as e:
+        # Refund on failure (idempotent if key provided)
+        try:
+            if debited:
+                refund(
+                    db,
+                    org_uuid,
+                    amount,
+                    reason="refund_template_gen",
+                    idempotency_key=(f"refund:template_gen:{idempotency_key}" if idempotency_key else None),
+                )
+        except Exception:
+            pass
         raise HTTPException(status_code=502, detail=f"Template generation failed: {e}")
 
     # Determine template name

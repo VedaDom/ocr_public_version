@@ -13,6 +13,8 @@ from app.domain.models.template import DocumentTemplate
 from app.domain.models.extracted_field import ExtractedField
 from app.services.rustfs import get_rustfs_client
 from app.services.ocr.gemini import GeminiProvider
+from app.core.config import get_settings
+from app.services.credits import debit_if_possible, refund, InsufficientCreditsError
 
 UTC = timezone.utc
 
@@ -29,18 +31,22 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
         if not job:
             return
 
-        # Transition to running if queued
+        # Transition to running if queued; track if this invocation started the job
+        just_started = False
+        debited = False
         try:
             if hasattr(OcrJob, "Status"):
                 if job.status in (OcrJob.Status.succeeded, OcrJob.Status.failed, OcrJob.Status.cancelled):
                     return
                 if job.status == OcrJob.Status.queued:
                     job.status = OcrJob.Status.running
+                    just_started = True
             else:
                 if str(job.status) in ("succeeded", "failed", "cancelled"):
                     return
                 if str(job.status) == "queued":
                     job.status = "running"  # type: ignore
+                    just_started = True
         except Exception:
             pass
 
@@ -49,6 +55,31 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
         job.provider = "gemini"
         db.add(job)
         db.commit()
+
+        if just_started:
+            amount = int(get_settings().ocr_page_cost)
+            try:
+                res = debit_if_possible(
+                    db,
+                    job.org_id,
+                    amount,
+                    reason="ocr_page",
+                    idempotency_key=f"ocr_page:{job.id}",
+                )
+                debited = not res.already_processed
+            except InsufficientCreditsError:
+                try:
+                    if hasattr(OcrJob, "Status"):
+                        job.status = OcrJob.Status.failed
+                    else:
+                        job.status = "failed"  # type: ignore
+                except Exception:
+                    pass
+                job.error_message = "insufficient credits"
+                job.completed_at = datetime.now(UTC)
+                db.add(job)
+                db.commit()
+                return
 
         # Load document
         doc = db.query(Document).filter(Document.id == job.document_id, Document.org_id == job.org_id).first()
@@ -123,6 +154,19 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
                 job.completed_at = datetime.now(UTC)
                 db.add(job)
                 db.commit()
+                # Refund if we charged earlier
+                try:
+                    if 'debited' in locals() and debited:
+                        amount = int(get_settings().ocr_page_cost)
+                        refund(
+                            db,
+                            job.org_id,
+                            amount,
+                            reason="refund_ocr_page",
+                            idempotency_key=f"refund:ocr_page:{job.id}",
+                        )
+                except Exception:
+                    pass
         finally:
             pass
     finally:

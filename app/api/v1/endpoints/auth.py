@@ -13,9 +13,11 @@ from app.domain.models.email_login_token import EmailLoginToken
 from app.domain.models.user import User
 from app.domain.models.refresh_token import RefreshToken
 from app.infrastructure.db import get_db
-from app.schemas.auth import LoginRequest, TokenResponse, UserOut, VerifyRequest, RefreshRequest
+from app.schemas.auth import LoginRequest, TokenResponse, UserOut, VerifyRequest, RefreshRequest, GoogleLoginRequest
 from app.services.email import send_login_email
-from passlib.hash import bcrypt
+import hashlib
+import json
+import urllib.request
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -84,7 +86,7 @@ def verify_token(payload: VerifyRequest, request: Request, db: Session = Depends
     # Issue refresh token
     settings = get_settings()
     refresh_raw = secrets.token_urlsafe(32)
-    refresh_hash = bcrypt.hash(refresh_raw)
+    refresh_hash = hashlib.sha256(refresh_raw.encode("utf-8")).hexdigest()
     rt = RefreshToken(
         user_id=user.id,
         token_hash=refresh_hash,
@@ -113,13 +115,13 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
         raise HTTPException(status_code=400, detail="refresh_token is required")
 
     now = datetime.now(UTC)
-    # Find matching refresh token (scan and verify)
-    candidates = db.query(RefreshToken).filter(RefreshToken.revoked_at.is_(None), RefreshToken.expires_at > now).all()
-    matched: RefreshToken | None = None
-    for t in candidates:
-        if bcrypt.verify(payload.refresh_token, t.token_hash):
-            matched = t
-            break
+    # Find matching refresh token (by sha256 hash)
+    token_hash = hashlib.sha256(payload.refresh_token.encode("utf-8")).hexdigest()
+    matched: RefreshToken | None = db.query(RefreshToken).filter(
+        RefreshToken.revoked_at.is_(None),
+        RefreshToken.expires_at > now,
+        RefreshToken.token_hash == token_hash,
+    ).first()
     if not matched:
         raise HTTPException(status_code=400, detail="Invalid or expired refresh token")
 
@@ -133,7 +135,7 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
 
     settings = get_settings()
     new_refresh_raw = secrets.token_urlsafe(32)
-    new_refresh_hash = bcrypt.hash(new_refresh_raw)
+    new_refresh_hash = hashlib.sha256(new_refresh_raw.encode("utf-8")).hexdigest()
     new_rt = RefreshToken(
         user_id=user.id,
         token_hash=new_refresh_hash,
@@ -148,5 +150,71 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
     return TokenResponse(
         access_token=access,
         refresh_token=new_refresh_raw,
+        user=UserOut(id=str(user.id), email=user.email, names=user.names or None),
+    )
+
+
+@router.post("/google", response_model=TokenResponse)
+def google_login(payload: GoogleLoginRequest, request: Request, db: Session = Depends(get_db)):
+    if not payload.id_token:
+        raise HTTPException(status_code=400, detail="id_token is required")
+
+    settings = get_settings()
+    if not settings.google_client_id:
+        raise HTTPException(status_code=500, detail="Google client ID not configured")
+
+    # Verify with Google tokeninfo endpoint
+    try:
+        with urllib.request.urlopen(
+            f"https://oauth2.googleapis.com/tokeninfo?id_token={payload.id_token}"
+        ) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid Google ID token")
+
+    aud = data.get("aud") or data.get("azp")
+    if aud != settings.google_client_id:
+        raise HTTPException(status_code=400, detail="Invalid audience for ID token")
+
+    email = data.get("email")
+    email_verified = str(data.get("email_verified", "false")).lower() == "true"
+    name = data.get("name") or ""
+    given_name = data.get("given_name") or ""
+    family_name = data.get("family_name") or ""
+    display_name = name or (given_name + (" " + family_name if family_name else "")).strip()
+
+    if not email or not email_verified:
+        raise HTTPException(status_code=400, detail="Email not present or not verified")
+
+    # Upsert user
+    user = db.query(User).filter(User.email == email.lower()).first()
+    if not user:
+        user = User(email=email.lower(), names=(display_name or ""))
+        db.add(user)
+        db.flush()
+    else:
+        if not user.names and display_name:
+            user.names = display_name
+            db.add(user)
+
+    db.commit()
+
+    # Issue tokens
+    access = create_access_token(subject=str(user.id))
+    refresh_raw = secrets.token_urlsafe(32)
+    refresh_hash = hashlib.sha256(refresh_raw.encode("utf-8")).hexdigest()
+    rt = RefreshToken(
+        user_id=user.id,
+        token_hash=refresh_hash,
+        user_agent=request.headers.get("user-agent"),
+        ip_address=(request.client.host if request.client else None),
+        expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_expires_days),
+    )
+    db.add(rt)
+    db.commit()
+
+    return TokenResponse(
+        access_token=access,
+        refresh_token=refresh_raw,
         user=UserOut(id=str(user.id), email=user.email, names=user.names or None),
     )
