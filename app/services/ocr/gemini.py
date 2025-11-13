@@ -17,7 +17,7 @@ class GeminiProvider(OcrProvider):
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY not configured")
         self._client = genai.Client(api_key=settings.gemini_api_key)
-        self._model = "gemini-1.5-flash-latest"
+        self._model = "gemini-flash-lite-latest"
 
     def _map_field_type(self, ft: str) -> types.Schema:
         t = (ft or "").lower()
