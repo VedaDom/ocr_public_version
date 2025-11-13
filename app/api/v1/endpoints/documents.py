@@ -14,12 +14,19 @@ from app.domain.models.document import Document
 from app.domain.models.document_batch import DocumentBatch
 from app.domain.models.ocr_job import OcrJob
 from app.domain.models.template import DocumentTemplate
+from app.domain.models.document_template_field import DocumentTemplateField
+from app.domain.models.extracted_field import ExtractedField
 from app.domain.models.user import User
 from app.schemas.documents import (
     DocumentOut,
     OcrJobOut,
     DocumentUploadResponse,
     DocumentBatchOut,
+)
+from app.schemas.extracted_fields import (
+    ExtractedFieldOut,
+    ExtractedFieldCreate,
+    ExtractedFieldUpdate,
 )
 from app.services.rustfs import get_rustfs_client
 from app.services.ocr.pipeline import process_ocr_job
@@ -288,3 +295,207 @@ def get_job(org_id: str, job_id: str, db: Session = Depends(get_db), user: User 
         started_at=job.started_at,
         completed_at=job.completed_at,
     )
+
+
+@router.get("/{org_id}/ocr/documents/{document_id}/fields", response_model=list[ExtractedFieldOut])
+def list_extracted_fields(org_id: str, document_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_uuid = _parse_uuid(org_id, "org id")
+    doc_uuid = _parse_uuid(document_id, "document id")
+
+    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this org")
+
+    doc = db.query(Document).filter(Document.id == doc_uuid, Document.org_id == org_uuid).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    rows = (
+        db.query(ExtractedField, DocumentTemplateField)
+        .join(DocumentTemplateField, DocumentTemplateField.id == ExtractedField.template_field_id)
+        .filter(ExtractedField.document_id == doc.id)
+        .order_by(DocumentTemplateField.order_index.asc(), ExtractedField.created_at.asc())
+        .all()
+    )
+    out: list[ExtractedFieldOut] = []
+    for ef, _fld in rows:
+        out.append(
+            ExtractedFieldOut(
+                id=str(ef.id),
+                document_id=str(ef.document_id),
+                template_field_id=str(ef.template_field_id),
+                user_id=(str(ef.user_id) if ef.user_id else None),
+                extracted_value=ef.extracted_value,
+                value=ef.value,
+                created_at=ef.created_at,
+                updated_at=ef.updated_at,
+            )
+        )
+    return out
+
+
+@router.get("/{org_id}/ocr/documents/{document_id}/fields/{field_id}", response_model=ExtractedFieldOut)
+def get_extracted_field(org_id: str, document_id: str, field_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_uuid = _parse_uuid(org_id, "org id")
+    doc_uuid = _parse_uuid(document_id, "document id")
+    fld_uuid = _parse_uuid(field_id, "field id")
+
+    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this org")
+
+    ef = (
+        db.query(ExtractedField)
+        .join(Document, Document.id == ExtractedField.document_id)
+        .filter(ExtractedField.id == fld_uuid, Document.id == doc_uuid, Document.org_id == org_uuid)
+        .first()
+    )
+    if not ef:
+        raise HTTPException(status_code=404, detail="Field not found")
+
+    return ExtractedFieldOut(
+        id=str(ef.id),
+        document_id=str(ef.document_id),
+        template_field_id=str(ef.template_field_id),
+        user_id=(str(ef.user_id) if ef.user_id else None),
+        extracted_value=ef.extracted_value,
+        value=ef.value,
+        created_at=ef.created_at,
+        updated_at=ef.updated_at,
+    )
+
+
+@router.post("/{org_id}/ocr/documents/{document_id}/fields", response_model=ExtractedFieldOut, status_code=201)
+def upsert_extracted_field(org_id: str, document_id: str, payload: ExtractedFieldCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_uuid = _parse_uuid(org_id, "org id")
+    doc_uuid = _parse_uuid(document_id, "document id")
+    try:
+        tf_uuid = uuid.UUID(payload.template_field_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid template_field_id")
+
+    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this org")
+
+    doc = db.query(Document).filter(Document.id == doc_uuid, Document.org_id == org_uuid).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    fld = (
+        db.query(DocumentTemplateField, DocumentTemplate)
+        .join(DocumentTemplate, DocumentTemplate.id == DocumentTemplateField.template_id)
+        .filter(DocumentTemplateField.id == tf_uuid, DocumentTemplate.org_id == org_uuid)
+        .first()
+    )
+    if not fld:
+        raise HTTPException(status_code=404, detail="Template field not found")
+
+    existing = (
+        db.query(ExtractedField)
+        .filter(ExtractedField.document_id == doc.id, ExtractedField.template_field_id == tf_uuid)
+        .first()
+    )
+    if existing:
+        if payload.value is not None:
+            existing.value = str(payload.value)
+        if payload.extracted_value is not None:
+            existing.extracted_value = str(payload.extracted_value)
+        existing.user_id = user.id
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return ExtractedFieldOut(
+            id=str(existing.id),
+            document_id=str(existing.document_id),
+            template_field_id=str(existing.template_field_id),
+            user_id=(str(existing.user_id) if existing.user_id else None),
+            extracted_value=existing.extracted_value,
+            value=existing.value,
+            created_at=existing.created_at,
+            updated_at=existing.updated_at,
+        )
+
+    ef = ExtractedField(
+        document_id=doc.id,
+        template_field_id=tf_uuid,
+        user_id=user.id,
+        extracted_value=str(payload.extracted_value or ""),
+        value=str(payload.value or ""),
+    )
+    db.add(ef)
+    db.commit()
+    db.refresh(ef)
+    return ExtractedFieldOut(
+        id=str(ef.id),
+        document_id=str(ef.document_id),
+        template_field_id=str(ef.template_field_id),
+        user_id=(str(ef.user_id) if ef.user_id else None),
+        extracted_value=ef.extracted_value,
+        value=ef.value,
+        created_at=ef.created_at,
+        updated_at=ef.updated_at,
+    )
+
+
+@router.patch("/{org_id}/ocr/documents/{document_id}/fields/{field_id}", response_model=ExtractedFieldOut)
+def update_extracted_field(org_id: str, document_id: str, field_id: str, payload: ExtractedFieldUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_uuid = _parse_uuid(org_id, "org id")
+    doc_uuid = _parse_uuid(document_id, "document id")
+    fld_uuid = _parse_uuid(field_id, "field id")
+
+    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this org")
+
+    ef = (
+        db.query(ExtractedField)
+        .join(Document, Document.id == ExtractedField.document_id)
+        .filter(ExtractedField.id == fld_uuid, Document.id == doc_uuid, Document.org_id == org_uuid)
+        .first()
+    )
+    if not ef:
+        raise HTTPException(status_code=404, detail="Field not found")
+
+    if payload.value is not None:
+        ef.value = str(payload.value)
+    if payload.extracted_value is not None:
+        ef.extracted_value = str(payload.extracted_value)
+    ef.user_id = user.id
+    db.add(ef)
+    db.commit()
+    db.refresh(ef)
+    return ExtractedFieldOut(
+        id=str(ef.id),
+        document_id=str(ef.document_id),
+        template_field_id=str(ef.template_field_id),
+        user_id=(str(ef.user_id) if ef.user_id else None),
+        extracted_value=ef.extracted_value,
+        value=ef.value,
+        created_at=ef.created_at,
+        updated_at=ef.updated_at,
+    )
+
+
+@router.delete("/{org_id}/ocr/documents/{document_id}/fields/{field_id}", status_code=204)
+def delete_extracted_field(org_id: str, document_id: str, field_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_uuid = _parse_uuid(org_id, "org id")
+    doc_uuid = _parse_uuid(document_id, "document id")
+    fld_uuid = _parse_uuid(field_id, "field id")
+
+    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this org")
+
+    ef = (
+        db.query(ExtractedField)
+        .join(Document, Document.id == ExtractedField.document_id)
+        .filter(ExtractedField.id == fld_uuid, Document.id == doc_uuid, Document.org_id == org_uuid)
+        .first()
+    )
+    if not ef:
+        raise HTTPException(status_code=404, detail="Field not found")
+
+    db.delete(ef)
+    db.commit()
+    return None
