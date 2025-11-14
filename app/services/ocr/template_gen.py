@@ -16,7 +16,7 @@ class TemplateGenerator:
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY not configured")
         self._client = genai.Client(api_key=settings.gemini_api_key)
-        self._model = "gemini-flash-lite-latest"
+        self._model = settings.gemini_model
 
     def _sanitize_name(self, s: str) -> str:
         s = s.strip().lower()
@@ -47,14 +47,19 @@ class TemplateGenerator:
         )
 
     def _prompt(self) -> str:
+        settings = get_settings()
+        langs = getattr(settings, "document_languages", ["en"]) or ["en"]
+        lang_hint = ", ".join(langs)
         return (
-            "You are a document template inference system. Analyze the uploaded PDF and infer a list of key-value fields "
-            "that a business would want to capture (e.g., invoice_number, invoice_date, total_amount, vendor_name). "
+            "You are a document template inference system. The document may be bilingual/multilingual. "
+            f"Consider these languages: {lang_hint}. "
+            "Analyze the uploaded PDF and infer a list of key-value fields that users would capture. "
             "Return ONLY JSON that conforms to the schema. Rules: "
-            "1) fields should be an array of objects with: name (snake_case key), label (human readable), field_type (one of string, number, date, boolean), required (boolean), description (short guidance). "
-            "2) Do not include values or example data, only field definitions. "
+            "1) fields is an array of objects with: name (snake_case), label (human readable), field_type (string|number|date|boolean), required (boolean), description (short guidance). "
+            "2) Do not include example values, only field definitions. "
             "3) Use stable, machine-friendly names. "
-            "4) Consider both printed and handwritten text; include fields commonly filled by hand (e.g., signature, handwritten totals, notes). "
+            "4) Consider printed headings and handwritten inputs; include fields commonly filled by hand (e.g., signatures, handwritten notes). "
+            "5) Where helpful, make the description include bilingual label synonyms observed on the page (e.g., FR/RW). "
         )
 
     def generate(self, *, pdf_bytes: bytes, content_type: str = "application/pdf") -> Dict[str, Any]:
@@ -64,6 +69,7 @@ class TemplateGenerator:
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=self._schema(),
+            temperature=0.1,
         )
         resp = self._client.models.generate_content(model=self._model, contents=contents, config=config)
         text = getattr(resp, "text", None)

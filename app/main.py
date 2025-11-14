@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request
 from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
+from fastapi.responses import RedirectResponse
 from app.middleware.api_key import ApiKeyAuthMiddleware
 
 from app.core.config import get_settings
@@ -74,6 +75,12 @@ def backfill_org_credits_on_startup() -> None:
         db.rollback()
     finally:
         db.close()
+
+
+@app.get("/documentation", include_in_schema=False)
+def documentation():
+    target = settings.docs_url or (settings.app_url.rstrip("/") + "/documentation")
+    return RedirectResponse(url=target)
 
 
 @app.get("/")

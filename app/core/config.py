@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     # Gemini
     gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.5-pro"
+    document_languages: list[str] = ["fr", "rw", "en"]
 
     # Google OAuth
     google_client_id: Optional[str] = None
