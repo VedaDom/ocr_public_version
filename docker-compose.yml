@@ -21,6 +21,8 @@ services:
       UVICORN_HOST: 0.0.0.0
       UVICORN_PORT: "8060"
       UVICORN_LOG_LEVEL: info
+      GEMINI_MODEL: ${GEMINI_MODEL}
+      DOCUMENT_LANGUAGES: ${DOCUMENT_LANGUAGES}
       # UVICORN_WORKERS: "2"  # uncomment to enable multiple workers
     ports:
       - "8060:8060"
