@@ -1,34 +1,45 @@
 services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aistudio}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-aistudio}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
   api:
     build:
       context: .
       dockerfile: Dockerfile
     environment:
-      ENVIRONMENT: prod
-      DATABASE_URL: ${DATABASE_URL}
-      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
-      APP_URL: ${APP_URL}
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_ALGORITHM: HS256
-      JWT_EXPIRES_MINUTES: "60"
-      RUSTFS_BASE_URL: ${RUSTFS_BASE_URL}
-      RUSTFS_API_KEY: ${RUSTFS_API_KEY}
-      RUSTFS_SECRET: ${RUSTFS_SECRET}
-      RUSTFS_BUCKET: ${RUSTFS_BUCKET}
-      RESEND_API_KEY: ${RESEND_API_KEY}
-      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
+      ENVIRONMENT: ${ENVIRONMENT:-prod}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/aistudio}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-["http://localhost:3000"]}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-pro}
+      DOCUMENT_LANGUAGES: ${DOCUMENT_LANGUAGES:-["fr","rw","en"]}
+      GEMINI_REQUESTS_PER_MINUTE: ${GEMINI_REQUESTS_PER_MINUTE:-4000}
+      GEMINI_MAX_CONCURRENCY: ${GEMINI_MAX_CONCURRENCY:-8}
+      ANALYTICS_ENDPOINT_URL: ${ANALYTICS_ENDPOINT_URL:-}
       UVICORN_HOST: 0.0.0.0
-      UVICORN_PORT: "8060"
-      UVICORN_LOG_LEVEL: info
-      GEMINI_MODEL: ${GEMINI_MODEL}
-      DOCUMENT_LANGUAGES: ${DOCUMENT_LANGUAGES}
+      UVICORN_PORT: ${UVICORN_PORT:-8060}
+      UVICORN_LOG_LEVEL: ${UVICORN_LOG_LEVEL:-info}
+      USE_ALEMBIC: "true"
       # UVICORN_WORKERS: "2"  # uncomment to enable multiple workers
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8060:8060"
-    # healthcheck:
-    #   test: ["CMD-SHELL", "curl -fsS http://localhost:8060/api/v1/health >/dev/null || exit 1"]
-    #   interval: 10s
-    #   timeout: 5s
-    #   retries: 12
     restart: unless-stopped
+
+volumes:
+  db_data:
