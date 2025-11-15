@@ -16,6 +16,7 @@ from .ocr_job import OcrJob
 from .document_batch import DocumentBatch
 from .api_key import OrganizationApiKey
 from .api_call_log import ApiCallLog
+from .template_gen_job import TemplateGenJob
 
 __all__ = [
     "User",
@@ -36,4 +37,5 @@ __all__ = [
     "DocumentBatch",
     "OrganizationApiKey",
     "ApiCallLog",
+    "TemplateGenJob",
 ]

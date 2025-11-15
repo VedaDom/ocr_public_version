@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -12,6 +12,7 @@ from app.domain.models.membership import Membership
 from app.domain.models.template import DocumentTemplate
 from app.domain.models.document_template_field import DocumentTemplateField
 from app.domain.models.user import User
+from app.domain.models.template_gen_job import TemplateGenJob
 from app.schemas.templates import (
     TemplateCreate,
     TemplateUpdate,
@@ -20,10 +21,13 @@ from app.schemas.templates import (
     TemplateFieldCreate,
     TemplateFieldUpdate,
     TemplateFieldOut,
+    TemplateGenJobOut,
 )
 from app.services.ocr.template_gen import TemplateGenerator
+from app.services.ocr.template_job import process_template_gen_job
 from app.core.config import get_settings
 from app.services.credits import debit_if_possible, refund, InsufficientCreditsError
+from app.services.rustfs import get_rustfs_client
 
 router = APIRouter(prefix="/orgs", tags=["ocr"])
 
@@ -102,13 +106,32 @@ def create_template(org_id: str, payload: TemplateCreate, db: Session = Depends(
     )
 
 
-@router.post("/{org_id}/ocr/templates/generate", response_model=TemplateDetailOut, status_code=201)
+def _job_out(job: TemplateGenJob) -> TemplateGenJobOut:
+    return TemplateGenJobOut(
+        id=str(job.id),
+        org_id=str(job.org_id),
+        created_by_id=str(job.created_by_id),
+        pdf_url=job.pdf_url,
+        name=job.name,
+        description=job.description,
+        status=job.status,
+        error_message=job.error_message,
+        template_id=(str(job.template_id) if job.template_id else None),
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+    )
+
+
+@router.post("/{org_id}/ocr/templates/generate", response_model=TemplateGenJobOut, status_code=202)
 async def generate_template_from_pdf(
     org_id: str,
     pdf: UploadFile = File(...),
     name: str | None = Form(default=None),
     description: str | None = Form(default=""),
     idempotency_key: str | None = Form(default=None),
+    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -128,116 +151,40 @@ async def generate_template_from_pdf(
     if (pdf.content_type or "").lower() != "application/pdf" and not pdf.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
+    # Upload the PDF to storage for background processing
     data = await pdf.read()
+    rustfs = get_rustfs_client()
+    pdf_url = await rustfs.upload_file(data, pdf.filename, pdf.content_type or "application/pdf")
 
-    # Atomic debit with idempotency
-    amount = int(get_settings().template_gen_cost)
-    debited = False
-    try:
-        res = debit_if_possible(
-            db,
-            org_uuid,
-            amount,
-            reason="template_gen",
-            idempotency_key=(f"template_gen:{idempotency_key}" if idempotency_key else None),
+    # Idempotency: if caller provided a key, return existing job if present
+    if idempotency_key:
+        existing = (
+            db.query(TemplateGenJob)
+            .filter(TemplateGenJob.org_id == org_uuid, TemplateGenJob.idempotency_key == idempotency_key)
+            .first()
         )
-        debited = not res.already_processed
-    except InsufficientCreditsError:
-        raise HTTPException(status_code=402, detail="insufficient credits")
+        if existing:
+            # If queued, ensure background task is scheduled again (best-effort)
+            if existing.status == "queued" and background_tasks is not None:
+                background_tasks.add_task(process_template_gen_job, existing.id)
+            return _job_out(existing)
 
-    try:
-        gen = TemplateGenerator()
-        result = gen.generate(pdf_bytes=data, content_type=pdf.content_type or "application/pdf")
-    except Exception as e:
-        # Refund on failure (idempotent if key provided)
-        try:
-            if debited:
-                refund(
-                    db,
-                    org_uuid,
-                    amount,
-                    reason="refund_template_gen",
-                    idempotency_key=(f"refund:template_gen:{idempotency_key}" if idempotency_key else None),
-                )
-        except Exception:
-            pass
-        raise HTTPException(status_code=502, detail=f"Template generation failed: {e}")
-
-    # Determine template name
-    tpl_name = (name or pdf.filename.rsplit(".", 1)[0]).strip()[:200]
-    if not tpl_name:
-        tpl_name = "Generated Template"
-
-    # Ensure unique name per org
-    base_name = tpl_name
-    suffix = 1
-    while db.query(DocumentTemplate).filter(DocumentTemplate.org_id == org_uuid, DocumentTemplate.name == tpl_name).first():
-        tpl_name = f"{base_name} ({suffix})"
-        suffix += 1
-
-    # Create template
-    t = DocumentTemplate(org_id=org_uuid, name=tpl_name, description=(description or "")[:500], created_by_id=user.id)
-    db.add(t)
-    db.flush()
-
-    # Create fields
-    fields = result.get("fields") or []
-    order = 1
-    for f in fields:
-        fname = str(f.get("name") or "").strip()[:100]
-        flabel = str(f.get("label") or fname).strip()[:200]
-        ftype = str(f.get("field_type") or "string").strip()[:50]
-        freq = bool(f.get("required") or False)
-        fdesc = str(f.get("description") or "").strip()[:500]
-        if not fname:
-            continue
-        rec = DocumentTemplateField(
-            template_id=t.id,
-            name=fname,
-            label=flabel,
-            field_type=ftype,
-            required=freq,
-            description=fdesc,
-            order_index=order,
-        )
-        db.add(rec)
-        order += 1
-
+    job = TemplateGenJob(
+        org_id=org_uuid,
+        created_by_id=user.id,
+        pdf_url=pdf_url,
+        name=(name or (pdf.filename.rsplit(".", 1)[0])).strip()[:200],
+        description=(description or "")[:500],
+        idempotency_key=(idempotency_key or None),
+    )
+    db.add(job)
     db.commit()
-    db.refresh(t)
+    db.refresh(job)
 
-    # Load created fields ordered
-    created_fields = (
-        db.query(DocumentTemplateField)
-        .filter(DocumentTemplateField.template_id == t.id)
-        .order_by(DocumentTemplateField.order_index.asc(), DocumentTemplateField.created_at.asc())
-        .all()
-    )
+    if background_tasks is not None:
+        background_tasks.add_task(process_template_gen_job, job.id)
 
-    return TemplateDetailOut(
-        id=str(t.id),
-        org_id=str(t.org_id),
-        name=t.name,
-        description=t.description,
-        created_by_id=str(t.created_by_id),
-        created_at=t.created_at,
-        updated_at=t.updated_at,
-        fields=[
-            TemplateFieldOut(
-                id=str(f.id),
-                template_id=str(f.template_id),
-                name=f.name,
-                label=f.label,
-                field_type=f.field_type,
-                required=f.required,
-                description=f.description,
-                order_index=f.order_index,
-                created_at=f.created_at,
-                updated_at=f.updated_at,
-            )
-            for f in created_fields
-        ],
-    )
+    return _job_out(job)
 
 
 @router.get("/{org_id}/ocr/templates/{template_id}", response_model=TemplateDetailOut)
@@ -351,6 +298,26 @@ def delete_template(org_id: str, template_id: str, db: Session = Depends(get_db)
     db.delete(t)
     db.commit()
     return None
+
+
+@router.get("/{org_id}/ocr/templates/generate/{job_id}", response_model=TemplateGenJobOut)
+def get_template_gen_job(org_id: str, job_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_uuid = _parse_uuid(org_id, "org id")
+    try:
+        jid = uuid.UUID(job_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+
+    # Must be a member to view
+    member = db.query(Membership).filter(Membership.user_id == user.id, Membership.org_id == org_uuid).first()
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this org")
+
+    job = db.query(TemplateGenJob).filter(TemplateGenJob.id == jid, TemplateGenJob.org_id == org_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return _job_out(job)
 
 
 @router.post("/{org_id}/ocr/templates/{template_id}/fields", response_model=TemplateFieldOut, status_code=201)

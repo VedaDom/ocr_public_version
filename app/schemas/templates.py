@@ -56,3 +56,19 @@ class TemplateFieldOut(BaseModel):
 
 class TemplateDetailOut(TemplateOut):
     fields: list[TemplateFieldOut] = []
+
+
+class TemplateGenJobOut(BaseModel):
+    id: str
+    org_id: str
+    created_by_id: str
+    pdf_url: str
+    name: str | None
+    description: str
+    status: str
+    error_message: str
+    template_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
