@@ -17,9 +17,8 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
-    uploaded_by_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    reference_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True, unique=True)
     batch_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("document_batches.id"), nullable=True, index=True)
     # Pages grouping and ordering
     group_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
@@ -30,8 +29,6 @@ class Document(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False
     )
 
-    organization: Mapped["Organization"] = relationship("Organization")
-    uploaded_by: Mapped["User"] = relationship("User")
     extracted_fields: Mapped[list["ExtractedField"]] = relationship(
         "ExtractedField", back_populates="document", cascade="all, delete-orphan"
     )

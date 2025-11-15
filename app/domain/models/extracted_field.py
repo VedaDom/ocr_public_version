@@ -19,8 +19,6 @@ class ExtractedField(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
     template_field_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("document_template_fields.id"), nullable=False, index=True)
-    # Who captured/edited the value (optional, may be system)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
     # Raw extracted value from OCR and the finalized user-corrected value
     extracted_value: Mapped[str] = mapped_column(String(2000), default="", nullable=False)
@@ -33,4 +31,3 @@ class ExtractedField(Base):
 
     document: Mapped["Document"] = relationship("Document", back_populates="extracted_fields")
     field: Mapped["DocumentTemplateField"] = relationship("DocumentTemplateField", back_populates="extracted_values")
-    user: Mapped["User"] = relationship("User")

@@ -12,10 +12,6 @@ class Settings(BaseSettings):
 
     # Infra
     database_url: Optional[str] = "postgresql+psycopg://postgres:postgres@localhost:5432/aistudio"
-    rustfs_base_url: Optional[str] = None
-    rustfs_api_key: Optional[str] = None
-    rustfs_secret: Optional[str] = None
-    rustfs_bucket: Optional[str] = "aistudio"
     # Email (Resend)
     resend_api_key: Optional[str] = None
     resend_from_email: Optional[str] = None
@@ -24,12 +20,17 @@ class Settings(BaseSettings):
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.5-pro"
     document_languages: list[str] = ["fr", "rw", "en"]
+    gemini_requests_per_minute: int = 4000
+    gemini_max_concurrency: int = 8
 
     # Google OAuth
     google_client_id: Optional[str] = None
 
     # App URLs
     app_url: str = "http://localhost:3000"
+
+    # Analytics
+    analytics_endpoint_url: Optional[str] = None
 
     # Auth/JWT
     jwt_secret: str = "devsecret"
@@ -46,6 +47,8 @@ class Settings(BaseSettings):
     # Pricing
     ocr_page_cost: int = 1
     template_gen_cost: int = 1
+
+    # Reserved for future runtime flags
 
     model_config = SettingsConfigDict(
         env_file=".env",

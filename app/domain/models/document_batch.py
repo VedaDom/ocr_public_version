@@ -17,10 +17,6 @@ class DocumentBatch(Base):
     __tablename__ = "document_batches"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False)
-    created_by_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
 
-    organization: Mapped["Organization"] = relationship("Organization")
-    created_by: Mapped["User"] = relationship("User")
     documents: Mapped[list["Document"]] = relationship("Document", back_populates="batch", cascade="all, delete-orphan")

@@ -19,7 +19,6 @@ class ExtractedFieldOut(BaseModel):
     id: str
     document_id: str
     template_field_id: str
-    user_id: str | None
     extracted_value: str
     value: str
     field_name: str

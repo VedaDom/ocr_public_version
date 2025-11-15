@@ -27,11 +27,6 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_all() -> None:
-    # Ensure submodules are loaded so metadata is populated
-    import app.domain.models.user  # noqa: F401
-    import app.domain.models.organization  # noqa: F401
-    import app.domain.models.membership  # noqa: F401
-    import app.domain.models.credit  # noqa: F401
-    import app.domain.models.email_login_token  # noqa: F401
-
+    # Ensure models are loaded so metadata is populated
+    import app.domain.models  # noqa: F401
     Base.metadata.create_all(bind=_engine)

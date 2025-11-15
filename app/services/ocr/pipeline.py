@@ -3,18 +3,24 @@ from __future__ import annotations
 import mimetypes
 import uuid
 from datetime import datetime, timezone
+import time
+import io
 
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.infrastructure.db import SessionLocal
 from app.domain.models.ocr_job import OcrJob
 from app.domain.models.document import Document
 from app.domain.models.template import DocumentTemplate
 from app.domain.models.extracted_field import ExtractedField
-from app.services.rustfs import get_rustfs_client
+from app.domain.models.credit_usage import CreditUsage
 from app.services.ocr.gemini import GeminiProvider
 from app.core.config import get_settings
-from app.services.credits import debit_if_possible, refund, InsufficientCreditsError
+import httpx
+from pypdf import PdfReader
+from app.services.rate_limit import get_limiter
+from app.services.analytics import send_analytics
 
 UTC = timezone.utc
 
@@ -33,7 +39,6 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
 
         # Transition to running if queued; track if this invocation started the job
         just_started = False
-        debited = False
         try:
             if hasattr(OcrJob, "Status"):
                 if job.status in (OcrJob.Status.succeeded, OcrJob.Status.failed, OcrJob.Status.cancelled):
@@ -56,40 +61,37 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
         db.add(job)
         db.commit()
 
-        if just_started:
-            amount = int(get_settings().ocr_page_cost)
-            try:
-                res = debit_if_possible(
-                    db,
-                    job.org_id,
-                    amount,
-                    reason="ocr_page",
-                    idempotency_key=f"ocr_page:{job.id}",
-                )
-                debited = not res.already_processed
-            except InsufficientCreditsError:
-                try:
-                    if hasattr(OcrJob, "Status"):
-                        job.status = OcrJob.Status.failed
-                    else:
-                        job.status = "failed"  # type: ignore
-                except Exception:
-                    pass
-                job.error_message = "insufficient credits"
-                job.completed_at = datetime.now(UTC)
-                db.add(job)
-                db.commit()
-                return
+        # Callback will be fired after marking success
+
+        # No credits logic in trimmed OCR service
 
         # Load document
-        doc = db.query(Document).filter(Document.id == job.document_id, Document.org_id == job.org_id).first()
+        doc = db.query(Document).filter(Document.id == job.document_id).first()
         if not doc:
             raise RuntimeError("Document not found for job")
 
-        # Download the page bytes
-        rustfs = get_rustfs_client()
-        page_bytes = rustfs.download_by_url_sync(doc.url)
-        content_type = _guess_content_type_from_url(doc.url)
+        # Download the document bytes over HTTP
+        page_bytes: bytes
+        content_type: str | None = None
+        try:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                resp = client.get(doc.url)
+                resp.raise_for_status()
+                page_bytes = resp.content
+                content_type = resp.headers.get("content-type")
+        except Exception as e:
+            raise RuntimeError(f"failed to download document: {e}")
+        if not content_type:
+            content_type = _guess_content_type_from_url(doc.url)
+
+        # Determine page count for credits
+        credits_used = 1
+        try:
+            if (content_type or "").lower().startswith("application/pdf") or doc.url.lower().endswith(".pdf"):
+                reader = PdfReader(io.BytesIO(page_bytes))
+                credits_used = max(1, len(reader.pages))
+        except Exception:
+            credits_used = 1
 
         # Prepare provider
         provider = GeminiProvider()
@@ -106,13 +108,19 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
         if schema is None:
             system_prompt = provider.build_system_prompt()
 
-        # Extract
-        result = provider.extract(
-            page_bytes=page_bytes,
-            content_type=content_type,
-            schema=schema,
-            system_prompt=system_prompt,
-        )
+        # Extract with rate limiting
+        limiter = get_limiter()
+        queue_size = limiter.acquire()
+        t0 = time.monotonic()
+        try:
+            result = provider.extract(
+                page_bytes=page_bytes,
+                content_type=content_type,
+                schema=schema,
+                system_prompt=system_prompt,
+            )
+        finally:
+            limiter.release()
 
         # Persist extracted fields if template present
         if fields:
@@ -121,7 +129,6 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
                 rec = ExtractedField(
                     document_id=doc.id,
                     template_field_id=f.id,
-                    user_id=None,
                     extracted_value=str(val),
                     value=str(val),
                 )
@@ -138,6 +145,77 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
         job.completed_at = datetime.now(UTC)
         db.add(job)
         db.commit()
+
+        # Record credit usage (success)
+        try:
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            cu = CreditUsage(
+                job_id=job.id,
+                document_id=doc.id,
+                template_id=job.template_id,
+                credits_used=int(credits_used),
+                status="succeeded",
+                error_message="",
+                queue_size=int(queue_size),
+                created_at=job.created_at,
+                started_at=job.started_at,
+                completed_at=job.completed_at,
+                duration_ms=duration_ms,
+            )
+            db.add(cu)
+            db.commit()
+
+            # Analytics
+            total_credits = db.query(func.coalesce(func.sum(CreditUsage.credits_used), 0)).scalar() or 0
+            payload = {
+                "type": "ocr_job",
+                "job_id": str(job.id),
+                "document_id": str(doc.id),
+                "template_id": (str(job.template_id) if job.template_id else None),
+                "provider": job.provider,
+                "status": "succeeded",
+                "error_message": None,
+                "created_at": job.created_at.isoformat() if job.created_at else None,
+                "started_at": job.started_at.isoformat() if job.started_at else None,
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                "duration_ms": duration_ms,
+                "queue_size": int(queue_size),
+                "credits_used": int(credits_used),
+                "total_credits": int(total_credits),
+                "document": {
+                    "reference_id": doc.reference_id,
+                    "url": doc.url,
+                    "content_type": content_type,
+                },
+            }
+            send_analytics(payload)
+        except Exception:
+            pass
+
+        # Fire callback if configured on template (after success)
+        try:
+            if job.template_id is not None:
+                tpl = db.query(DocumentTemplate).filter(DocumentTemplate.id == job.template_id).first()
+                if tpl and getattr(tpl, "callback_url", None):
+                    payload: dict = {
+                        "job_id": str(job.id),
+                        "status": str(job.status.value) if hasattr(job.status, "value") else str(job.status),
+                        "document": {
+                            "id": str(doc.id),
+                            "reference_id": doc.reference_id,
+                            "url": doc.url,
+                        },
+                        "template_id": str(tpl.id),
+                        "extracted": (result if isinstance(result, dict) else {}),
+                        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                    }
+                    try:
+                        with httpx.Client(timeout=10.0) as client:
+                            client.post(tpl.callback_url, json=payload)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     except Exception as e:
         # Mark failure
         try:
@@ -154,17 +232,74 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
                 job.completed_at = datetime.now(UTC)
                 db.add(job)
                 db.commit()
-                # Refund if we charged earlier
+                # Failure callback
                 try:
-                    if 'debited' in locals() and debited:
-                        amount = int(get_settings().ocr_page_cost)
-                        refund(
-                            db,
-                            job.org_id,
-                            amount,
-                            reason="refund_ocr_page",
-                            idempotency_key=f"refund:ocr_page:{job.id}",
-                        )
+                    if job.template_id is not None:
+                        tpl = db.query(DocumentTemplate).filter(DocumentTemplate.id == job.template_id).first()
+                        doc = db.query(Document).filter(Document.id == job.document_id).first()
+                        if tpl and getattr(tpl, "callback_url", None) and doc:
+                            payload: dict = {
+                                "job_id": str(job.id),
+                                "status": str(job.status.value) if hasattr(job.status, "value") else str(job.status),
+                                "error_message": job.error_message,
+                                "document": {
+                                    "id": str(doc.id),
+                                    "reference_id": doc.reference_id,
+                                    "url": doc.url,
+                                },
+                                "template_id": str(tpl.id),
+                                "extracted": {},
+                                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                            }
+                            try:
+                                with httpx.Client(timeout=10.0) as client:
+                                    client.post(tpl.callback_url, json=payload)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                # Record credit usage (failure -> 0)
+                try:
+                    duration_ms = None
+                    try:
+                        if job.started_at and job.completed_at:
+                            duration_ms = int((job.completed_at - job.started_at).total_seconds() * 1000)
+                    except Exception:
+                        pass
+                    cu = CreditUsage(
+                        job_id=job.id,
+                        document_id=job.document_id,
+                        template_id=job.template_id,
+                        credits_used=0,
+                        status="failed",
+                        error_message=job.error_message,
+                        queue_size=0,
+                        created_at=job.created_at,
+                        started_at=job.started_at,
+                        completed_at=job.completed_at,
+                        duration_ms=duration_ms,
+                    )
+                    db.add(cu)
+                    db.commit()
+
+                    total_credits = db.query(func.coalesce(func.sum(CreditUsage.credits_used), 0)).scalar() or 0
+                    payload = {
+                        "type": "ocr_job",
+                        "job_id": str(job.id),
+                        "document_id": str(job.document_id),
+                        "template_id": (str(job.template_id) if job.template_id else None),
+                        "provider": job.provider,
+                        "status": "failed",
+                        "error_message": job.error_message,
+                        "created_at": job.created_at.isoformat() if job.created_at else None,
+                        "started_at": job.started_at.isoformat() if job.started_at else None,
+                        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                        "duration_ms": duration_ms,
+                        "queue_size": 0,
+                        "credits_used": 0,
+                        "total_credits": int(total_credits),
+                    }
+                    send_analytics(payload)
                 except Exception:
                     pass
         finally:

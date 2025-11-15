@@ -9,8 +9,6 @@ psycopg[binary]
 alembic
 passlib[bcrypt]
 python-jose[cryptography]
-python-multipart
 email-validator
-boto3
 google-genai
 pypdf

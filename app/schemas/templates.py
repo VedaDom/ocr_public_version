@@ -7,19 +7,20 @@ from pydantic import BaseModel, Field
 class TemplateCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=500)
+    callback_url: str | None = Field(default=None, max_length=1024)
 
 
 class TemplateUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=500)
+    callback_url: str | None = Field(default=None, max_length=1024)
 
 
 class TemplateOut(BaseModel):
     id: str
-    org_id: str
     name: str
     description: str
-    created_by_id: str
+    callback_url: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -58,10 +59,16 @@ class TemplateDetailOut(TemplateOut):
     fields: list[TemplateFieldOut] = []
 
 
+class TemplateGenJobCreate(BaseModel):
+    pdf_url: str = Field(min_length=1, max_length=1024)
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default="", max_length=500)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    callback_url: str | None = Field(default=None, max_length=1024)
+
+
 class TemplateGenJobOut(BaseModel):
     id: str
-    org_id: str
-    created_by_id: str
     pdf_url: str
     name: str | None
     description: str

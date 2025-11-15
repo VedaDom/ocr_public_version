@@ -3,8 +3,12 @@ set -eu
 
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 
-# Run migrations
-alembic upgrade head
+# Init database schema
+if [ "${USE_ALEMBIC:-false}" = "true" ]; then
+  alembic upgrade head
+else
+  python -c 'from app.infrastructure.db import create_all; create_all()'
+fi
 
 # Start API server
 UVICORN_HOST="${UVICORN_HOST:-0.0.0.0}"
