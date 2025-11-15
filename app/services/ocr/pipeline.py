@@ -126,11 +126,22 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
         if fields:
             for f in fields:
                 val = result.get(f.name, "") if isinstance(result, dict) else ""
+                conf = None
+                # New format: { value, confidence }
+                if isinstance(val, dict):
+                    v = val.get("value", "")
+                    c = val.get("confidence", None)
+                    try:
+                        conf = float(c) if c is not None else None
+                    except Exception:
+                        conf = None
+                    val = v
                 rec = ExtractedField(
                     document_id=doc.id,
                     template_field_id=f.id,
                     extracted_value=str(val),
                     value=str(val),
+                    confidence=conf,
                 )
                 db.add(rec)
 

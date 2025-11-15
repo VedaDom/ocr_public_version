@@ -28,11 +28,22 @@ class GeminiProvider(OcrProvider):
             return types.Schema(type=types.Type.BOOLEAN)
         return types.Schema(type=types.Type.STRING)
 
+    def _wrap_value_with_confidence(self, ft: str) -> types.Schema:
+        return types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "value": self._map_field_type(ft),
+                "confidence": types.Schema(type=types.Type.NUMBER),
+            },
+            required=["value"],
+        )
+
     def build_schema_from_fields(self, fields: List[DocumentTemplateField]) -> types.Schema:
         props: Dict[str, types.Schema] = {}
         required: List[str] = []
         for f in fields:
-            props[f.name] = self._map_field_type(f.field_type)
+            # Expect an object per field with { value, confidence }
+            props[f.name] = self._wrap_value_with_confidence(f.field_type)
             if f.required:
                 required.append(f.name)
         return types.Schema(type=types.Type.OBJECT, properties=props, required=required)
@@ -46,7 +57,9 @@ class GeminiProvider(OcrProvider):
             f"Prioritize and understand content in these languages: {lang_hint}. "
             "The page may include printed headings and handwritten entries. Read both carefully. "
             "Return ONLY JSON that strictly conforms to the provided schema. Do not add extra keys. "
-            "If a field is not present, return an empty string for that field. "
+            "For each field return an object with two keys: 'value' and 'confidence'. "
+            "The 'confidence' must be a number between 0 and 1 indicating your confidence in the chosen 'value'. "
+            "If a field is not present, return an empty string in the 'value' for that field and a low confidence (e.g. 0.0). "
             "For numbers return numeric types where possible. For dates, normalize to ISO YYYY-MM-DD when feasible. "
             "Do NOT translate or normalize proper nouns (people or location names). Preserve original spelling, casing, "
             "and diacritics exactly as written, including Kinyarwanda orthography. Allow hyphens, apostrophes and spaces "

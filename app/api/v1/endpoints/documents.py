@@ -228,6 +228,7 @@ def list_extracted_fields(document_id: str, db: Session = Depends(get_db)):
                 template_field_id=str(ef.template_field_id),
                 extracted_value=ef.extracted_value,
                 value=ef.value,
+                confidence=ef.confidence,
                 field_name=_fld.name,
                 field_label=_fld.label,
                 created_at=ef.created_at,
@@ -258,6 +259,7 @@ def get_extracted_field(document_id: str, field_id: str, db: Session = Depends(g
         template_field_id=str(ef.template_field_id),
         extracted_value=ef.extracted_value,
         value=ef.value,
+        confidence=ef.confidence,
         field_name=(fld.name if fld else ""),
         field_label=(fld.label if fld else ""),
         created_at=ef.created_at,
@@ -295,6 +297,8 @@ def upsert_extracted_field(document_id: str, payload: ExtractedFieldCreate, db: 
             existing.value = str(payload.value)
         if payload.extracted_value is not None:
             existing.extracted_value = str(payload.extracted_value)
+        if payload.confidence is not None:
+            existing.confidence = float(payload.confidence)
         db.add(existing)
         db.commit()
         db.refresh(existing)
@@ -305,6 +309,7 @@ def upsert_extracted_field(document_id: str, payload: ExtractedFieldCreate, db: 
             template_field_id=str(existing.template_field_id),
             extracted_value=existing.extracted_value,
             value=existing.value,
+            confidence=existing.confidence,
             field_name=(fld_row.name if fld_row else ""),
             field_label=(fld_row.label if fld_row else ""),
             created_at=existing.created_at,
@@ -316,6 +321,7 @@ def upsert_extracted_field(document_id: str, payload: ExtractedFieldCreate, db: 
         template_field_id=tf_uuid,
         extracted_value=str(payload.extracted_value or ""),
         value=str(payload.value or ""),
+        confidence=(float(payload.confidence) if payload.confidence is not None else None),
     )
     db.add(ef)
     db.commit()
@@ -327,6 +333,7 @@ def upsert_extracted_field(document_id: str, payload: ExtractedFieldCreate, db: 
         template_field_id=str(ef.template_field_id),
         extracted_value=ef.extracted_value,
         value=ef.value,
+        confidence=ef.confidence,
         field_name=(fld_row.name if fld_row else ""),
         field_label=(fld_row.label if fld_row else ""),
         created_at=ef.created_at,
@@ -352,6 +359,8 @@ def update_extracted_field(document_id: str, field_id: str, payload: ExtractedFi
         ef.value = str(payload.value)
     if payload.extracted_value is not None:
         ef.extracted_value = str(payload.extracted_value)
+    if payload.confidence is not None:
+        ef.confidence = float(payload.confidence)
     db.add(ef)
     db.commit()
     db.refresh(ef)
@@ -362,6 +371,7 @@ def update_extracted_field(document_id: str, field_id: str, payload: ExtractedFi
         template_field_id=str(ef.template_field_id),
         extracted_value=ef.extracted_value,
         value=ef.value,
+        confidence=ef.confidence,
         field_name=(fld_row.name if fld_row else ""),
         field_label=(fld_row.label if fld_row else ""),
         created_at=ef.created_at,

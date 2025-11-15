@@ -8,11 +8,13 @@ class ExtractedFieldCreate(BaseModel):
     template_field_id: str
     value: str | None = None
     extracted_value: str | None = None
+    confidence: float | None = None
 
 
 class ExtractedFieldUpdate(BaseModel):
     value: str | None = None
     extracted_value: str | None = None
+    confidence: float | None = None
 
 
 class ExtractedFieldOut(BaseModel):
@@ -21,6 +23,7 @@ class ExtractedFieldOut(BaseModel):
     template_field_id: str
     extracted_value: str
     value: str
+    confidence: float | None = None
     field_name: str
     field_label: str
     created_at: datetime
