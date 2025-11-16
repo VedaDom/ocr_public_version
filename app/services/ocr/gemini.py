@@ -53,18 +53,28 @@ class GeminiProvider(OcrProvider):
         langs = getattr(settings, "document_languages", ["en"]) or ["en"]
         lang_hint = ", ".join(langs)
         base = (
-            "You are an OCR extraction system. The document may be bilingual/multilingual. "
+            "You are an OCR extraction system for Rwandan civil registry forms. "
             f"Prioritize and understand content in these languages: {lang_hint}. "
             "The page may include printed headings and handwritten entries. Read both carefully. "
             "Return ONLY JSON that strictly conforms to the provided schema. Do not add extra keys. "
             "For each field return an object with two keys: 'value' and 'confidence'. "
-            "The 'confidence' must be a number between 0 and 1 indicating your confidence in the chosen 'value'. "
-            "If a field is not present, return an empty string in the 'value' for that field and a low confidence (e.g. 0.0). "
-            "For numbers return numeric types where possible. For dates, normalize to ISO YYYY-MM-DD when feasible. "
-            "Do NOT translate or normalize proper nouns (people or location names). Preserve original spelling, casing, "
-            "and diacritics exactly as written, including Kinyarwanda orthography. Allow hyphens, apostrophes and spaces "
-            "in names; do not spell-correct or anglicize. "
-            "If multiple candidates exist for a field, choose the one closest to the labeled area on the form. "
+            "The 'confidence' must be a number between 0 and 1 reflecting certainty in the chosen value. "
+            "If a field is absent, return an empty string in 'value' and a low confidence (e.g., 0.0). "
+            "Use LATIN script only (English/French/Kinyarwanda). Do NOT output Cyrillic or Greek. "
+            "If a non-Latin lookalike appears (e.g., Cyrillic 'Р' vs Latin 'P'), convert it to the correct LATIN character. "
+            "For person, place and office names, output the full multi-word name as written; never drop tokens. "
+            "Preserve spaces, apostrophes and hyphens; do not compress names to a single token. "
+            "Unify the same entity across this document: if the same person/place/office repeats, choose the clearest, highest-confidence reading seen and reuse it. "
+            "If a new reading differs by one uncertain character from a prior high-confidence reading, reuse the prior reading and reduce confidence slightly (e.g., 0.75–0.9). "
+            "Use the label language to disambiguate (e.g., label 'Nationalité' favors 'Rwandaise' over 'Rwandese' if ambiguous). "
+            "Resolve common handwriting confusions by choosing a valid word/toponym: R↔N, G↔J, w↔v/u, l↔I, 0↔O, e↔c/s, m↔rn. "
+            "Prefer 'Remera' over 'Newera' when consistent with the form; prefer 'Kageyo' over 'Kajiyo' if strokes are ambiguous. "
+            "Years must be 4 digits without decimals (e.g., 2015 not 2015.0). Strip stray punctuation/spaces from numeric fields; do not invent digits. "
+            "Dates: normalize to ISO YYYY-MM-DD when readable; otherwise return the raw string with lower confidence. "
+            "When the field is 'sex', map to 'Gabo' (male) or 'Gore' (female) if handwriting indicates those; otherwise return the raw value with lower confidence. "
+            "Confidence must reflect certainty: 0.95–1.00 only when every character is unambiguous; 0.75–0.94 for minor single-character corrections or unified reuse; 0.50–0.74 when multiple characters are uncertain or a guess was required; ≤0.49 for illegible/missing content. "
+            "Do not translate proper nouns; once disambiguated to valid Latin text, keep that spelling. "
+            "Reference toponyms to prefer if within one character: Remera, Kicukiro, Nyarugenge, Gasabo, Nyamirambo, Musanze, Gisenyi, Kageyo. "
         )
 
         if fields:

@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 import time
 import io
+import re
+import unicodedata
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -23,6 +25,59 @@ from app.services.rate_limit import get_limiter
 from app.services.analytics import send_analytics
 
 UTC = timezone.utc
+
+
+_CYR_TO_LAT = {
+    "А": "A", "В": "B", "С": "C", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "Т": "T", "У": "Y", "Х": "X",
+    "а": "a", "с": "c", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o", "р": "p", "т": "t", "у": "y", "х": "x",
+    "І": "I", "і": "i", "Ј": "J", "ј": "j", "П": "P",
+}
+
+
+def _to_latin_lookalike(s: str) -> str:
+    return "".join(_CYR_TO_LAT.get(ch, ch) for ch in s)
+
+
+def _contains_non_latin_alpha(s: str) -> bool:
+    for ch in s:
+        if ch.isalpha():
+            name = unicodedata.name(ch, "")
+            if "LATIN" not in name and not ("GREEK" not in name and "CYRILLIC" not in name):
+                return True
+    return False
+
+
+def _normalize_sex(s: str) -> str | None:
+    t = s.strip().lower()
+    mapping = {
+        "m": "Gabo", "male": "Gabo", "homme": "Gabo", "masculin": "Gabo", "gabo": "Gabo",
+        "f": "Gore", "female": "Gore", "femme": "Gore", "feminin": "Gore", "féminin": "Gore", "gore": "Gore",
+    }
+    return mapping.get(t)
+
+
+def _normalize_field_value(raw: str, field: DocumentTemplateField) -> tuple[str, float]:
+    s = str(raw or "")
+    penalty = 0.0
+    if _contains_non_latin_alpha(s):
+        s = _to_latin_lookalike(s)
+        penalty = max(penalty, 0.6)
+    # Standardize whitespace
+    s = " ".join(s.split())
+    fname = (getattr(field, "name", "") or "").lower()
+    ftype = (getattr(field, "field_type", "") or "").lower()
+    # Sex normalization
+    if "sex" in fname:
+        norm = _normalize_sex(s)
+        if norm and norm != s:
+            s = norm
+            penalty = max(penalty, 0.2)
+    # Year/number normalization: strip trailing .0
+    if "year" in fname or ftype in ("number", "int", "integer"):
+        if re.fullmatch(r"\d+\.0", s):
+            s = s[:-2]
+            penalty = max(penalty, 0.2)
+    return s, penalty
 
 
 def _guess_content_type_from_url(url: str) -> str:
@@ -127,7 +182,6 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
             for f in fields:
                 val = result.get(f.name, "") if isinstance(result, dict) else ""
                 conf = None
-                # New format: { value, confidence }
                 if isinstance(val, dict):
                     v = val.get("value", "")
                     c = val.get("confidence", None)
@@ -136,11 +190,17 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
                     except Exception:
                         conf = None
                     val = v
+                # Normalize value and adjust confidence
+                norm_val, penalty = _normalize_field_value(str(val), f)
+                if conf is None:
+                    conf = 0.5
+                if penalty > 0:
+                    conf = max(0.0, min(1.0, conf * (1.0 - penalty)))
                 rec = ExtractedField(
                     document_id=doc.id,
                     template_field_id=f.id,
-                    extracted_value=str(val),
-                    value=str(val),
+                    extracted_value=norm_val,
+                    value=norm_val,
                     confidence=conf,
                 )
                 db.add(rec)
