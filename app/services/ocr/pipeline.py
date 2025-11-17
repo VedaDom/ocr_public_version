@@ -8,6 +8,7 @@ import io
 import re
 import unicodedata
 import os
+import logging
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -296,9 +297,24 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
                     }
                     try:
                         with httpx.Client(timeout=10.0) as client:
-                            client.post(tpl.callback_url, json=payload)
-                    except Exception:
-                        pass
+                            resp = client.post(tpl.callback_url, json=payload)
+                            logging.info(
+                                "callback success url=%s status=%s job_id=%s template_id=%s payload=%s",
+                                tpl.callback_url,
+                                getattr(resp, "status_code", None),
+                                str(job.id),
+                                str(tpl.id),
+                                payload,
+                            )
+                    except Exception as e:
+                        logging.error(
+                            "callback error url=%s job_id=%s template_id=%s error=%s payload=%s",
+                            tpl.callback_url,
+                            str(job.id),
+                            str(tpl.id),
+                            str(e),
+                            payload,
+                        )
         except Exception:
             pass
     except Exception as e:
@@ -338,9 +354,24 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
                             }
                             try:
                                 with httpx.Client(timeout=10.0) as client:
-                                    client.post(tpl.callback_url, json=payload)
-                            except Exception:
-                                pass
+                                    resp = client.post(tpl.callback_url, json=payload)
+                                    logging.info(
+                                        "callback failure url=%s status=%s job_id=%s template_id=%s payload=%s",
+                                        tpl.callback_url,
+                                        getattr(resp, "status_code", None),
+                                        str(job.id),
+                                        str(tpl.id),
+                                        payload,
+                                    )
+                            except Exception as e:
+                                logging.error(
+                                    "callback failure error url=%s job_id=%s template_id=%s error=%s payload=%s",
+                                    tpl.callback_url,
+                                    str(job.id),
+                                    str(tpl.id),
+                                    str(e),
+                                    payload,
+                                )
                 except Exception:
                     pass
                 # Record credit usage (failure -> 0)
