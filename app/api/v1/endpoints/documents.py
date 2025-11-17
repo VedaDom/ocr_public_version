@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form, Body
 from sqlalchemy.orm import Session
 
 from app.infrastructure.db import get_db
@@ -42,16 +42,21 @@ def _start_ocr_job(job_id: uuid.UUID) -> None:
 
 @router.post("/documents", response_model=DocumentUploadResponse, status_code=201)
 def register_document(
-    payload: DocumentCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    file: UploadFile | None = File(None),
+    url: str | None = Form(None),
+    template_id: str | None = Form(None),
+    reference_id: str | None = Form(None),
+    payload: DocumentCreate | None = Body(None),
 ):
 
     # Validate template if provided
     tpl_id = None
-    if payload.template_id:
+    eff_template_id = template_id or (payload.template_id if payload else None)
+    if eff_template_id:
         try:
-            tpl_uuid = uuid.UUID(payload.template_id)
+            tpl_uuid = uuid.UUID(eff_template_id)
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid template_id")
         tpl = db.query(DocumentTemplate).filter(DocumentTemplate.id == tpl_uuid).first()
@@ -60,13 +65,31 @@ def register_document(
         tpl_id = tpl.id
 
     # Create document (single)
-    if payload.reference_id:
-        existing = db.query(Document).filter(Document.reference_id == payload.reference_id).first()
+    eff_reference = (reference_id if reference_id is not None else (payload.reference_id if payload else None))
+    if eff_reference:
+        existing = db.query(Document).filter(Document.reference_id == eff_reference).first()
         if existing:
             raise HTTPException(status_code=409, detail="reference_id already exists")
+    # Determine source URL from uploaded file or provided URL/body
+    import os
+    eff_url: str | None = url or (payload.url if payload else None)
+    if file is not None:
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in (".pdf", ".jpg", ".jpeg", ".png", ".webp"):
+            ct = (file.content_type or "").lower()
+            ext = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(ct, ".pdf")
+        fname = f"doc_{uuid.uuid4().hex}{ext}"
+        dst = os.path.join("app", "tmp", fname)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, "wb") as out:
+            out.write(file.file.read())
+        eff_url = f"file://{os.path.abspath(dst)}"
+    if not eff_url:
+        raise HTTPException(status_code=400, detail="Provide either file or url")
+
     doc = Document(
-        url=payload.url,
-        reference_id=(payload.reference_id or None),
+        url=eff_url,
+        reference_id=(eff_reference or None),
         page_number=1,
     )
     db.add(doc)

@@ -35,6 +35,7 @@ class TemplateFieldCreate(BaseModel):
 
 
 class TemplateFieldUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
     label: str | None = Field(default=None, min_length=1, max_length=200)
     field_type: str | None = Field(default=None, min_length=1, max_length=50)
     required: bool | None = None

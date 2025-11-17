@@ -7,6 +7,7 @@ import time
 import io
 import re
 import unicodedata
+import os
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -125,19 +126,25 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
         if not doc:
             raise RuntimeError("Document not found for job")
 
-        # Download the document bytes over HTTP
         page_bytes: bytes
         content_type: str | None = None
+        tmp_path: str | None = None
         try:
-            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                resp = client.get(doc.url)
-                resp.raise_for_status()
-                page_bytes = resp.content
-                content_type = resp.headers.get("content-type")
+            if isinstance(doc.url, str) and doc.url.startswith("file://"):
+                tmp_path = doc.url[len("file://"):]
+                with open(tmp_path, "rb") as f:
+                    page_bytes = f.read()
+                content_type = mimetypes.guess_type(tmp_path)[0]
+            else:
+                with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                    resp = client.get(doc.url)
+                    resp.raise_for_status()
+                    page_bytes = resp.content
+                    content_type = resp.headers.get("content-type")
         except Exception as e:
             raise RuntimeError(f"failed to download document: {e}")
         if not content_type:
-            content_type = _guess_content_type_from_url(doc.url)
+            content_type = _guess_content_type_from_url(tmp_path or doc.url)
 
         # Determine page count for credits
         credits_used = 1
@@ -216,6 +223,13 @@ def process_ocr_job(job_id: uuid.UUID) -> None:
         job.completed_at = datetime.now(UTC)
         db.add(job)
         db.commit()
+
+        # Cleanup local temp file on success (if input was a file:// URL)
+        try:
+            if tmp_path and os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
         # Record credit usage (success)
         try:

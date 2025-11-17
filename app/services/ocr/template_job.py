@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
+import os
 
 from app.infrastructure.db import SessionLocal
 from app.domain.models.template_gen_job import TemplateGenJob
@@ -33,11 +34,17 @@ def process_template_gen_job(job_id: uuid.UUID) -> None:
         # No credits logic in trimmed OCR service
 
         try:
-            # Download the PDF via HTTP
-            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                resp = client.get(job.pdf_url)
-                resp.raise_for_status()
-                pdf_bytes = resp.content
+            # Obtain PDF bytes from either local temp file (file://) or HTTP(S)
+            tmp_path: str | None = None
+            if isinstance(job.pdf_url, str) and job.pdf_url.startswith("file://"):
+                tmp_path = job.pdf_url[len("file://"):]
+                with open(tmp_path, "rb") as f:
+                    pdf_bytes = f.read()
+            else:
+                with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                    resp = client.get(job.pdf_url)
+                    resp.raise_for_status()
+                    pdf_bytes = resp.content
             gen = TemplateGenerator()
             result = gen.generate(pdf_bytes=pdf_bytes, content_type="application/pdf")
 
@@ -82,6 +89,13 @@ def process_template_gen_job(job_id: uuid.UUID) -> None:
                 order += 1
 
             db.commit()
+
+            # Cleanup local temp file on success
+            try:
+                if tmp_path and os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
             job.template_id = t.id
             job.status = "succeeded"
             job.completed_at = datetime.now(UTC)

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OCR Admin</title>
+  <link rel="stylesheet" href="/admin/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>OCR Admin</h1>
+    <span class="subtitle">Templates and Fields</span>
+  </header>
+
+  <main class="layout">
+    <section class="sidebar">
+      <div class="card">
+        <h2>Create Template</h2>
+        <form id="create-template-form">
+          <label>
+            <span>Name</span>
+            <input name="name" type="text" placeholder="Marriage Act" required />
+          </label>
+          <label>
+            <span>Description</span>
+            <input name="description" type="text" placeholder="Short description" />
+          </label>
+          <label>
+            <span>Callback URL (optional)</span>
+            <input name="callback_url" type="url" placeholder="https://example.com/callback" />
+          </label>
+          <button type="submit" class="btn primary">Create</button>
+        </form>
+      </div>
+
+      <div class="card" id="templates-card">
+        <h2>Templates</h2>
+        <div id="templates-list" class="list"></div>
+      </div>
+    </section>
+
+    <section class="content">
+      <div class="card" id="template-detail" hidden>
+        <div class="detail-header">
+          <h2 id="tpl-name">Template</h2>
+          <div class="muted" id="tpl-meta"></div>
+        </div>
+
+        <div class="fields-actions">
+          <details>
+            <summary>Add Field</summary>
+            <form id="add-field-form" class="grid">
+              <label>
+                <span>Name</span>
+                <input name="name" type="text" placeholder="spouse1_name" required />
+              </label>
+              <label>
+                <span>Label</span>
+                <input name="label" type="text" placeholder="Spouse 1 Name" required />
+              </label>
+              <label>
+                <span>Type</span>
+                <select name="field_type">
+                  <option value="string">string</option>
+                  <option value="number">number</option>
+                  <option value="boolean">boolean</option>
+                  <option value="date">date</option>
+                </select>
+              </label>
+              <label>
+                <span>Required</span>
+                <select name="required">
+                  <option value="false" selected>No</option>
+                  <option value="true">Yes</option>
+                </select>
+              </label>
+              <label>
+                <span>Description</span>
+                <input name="description" type="text" placeholder="Hints to the model" />
+              </label>
+              <label>
+                <span>Order</span>
+                <input name="order_index" type="number" min="0" step="1" value="0" />
+              </label>
+              <button type="submit" class="btn">Add Field</button>
+            </form>
+          </details>
+        </div>
+
+        <h3>Fields</h3>
+        <div id="fields-list" class="vstack"></div>
+      </div>
+
+      <div id="empty-state" class="card center">
+        <p>Select a template to manage its fields.</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="overlay" class="overlay" hidden>
+    <div class="spinner"></div>
+  </div>
+
+  <script src="/admin/app.js" type="module"></script>
+</body>
+</html>

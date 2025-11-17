@@ -48,7 +48,10 @@ class Settings(BaseSettings):
     ocr_page_cost: int = 1
     template_gen_cost: int = 1
 
-    # Reserved for future runtime flags
+    # Temp files cleanup
+    temp_cleanup_enabled: bool = True
+    temp_cleanup_ttl_seconds: int = 86400
+    temp_cleanup_interval_seconds: int = 3600
 
     model_config = SettingsConfigDict(
         env_file=".env",

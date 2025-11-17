@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form, Request, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -21,6 +21,7 @@ from app.schemas.templates import (
     TemplateGenJobOut,
 )
 from app.services.ocr.template_job import process_template_gen_job
+import os
 
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 
@@ -90,24 +91,54 @@ def _job_out(job: TemplateGenJob) -> TemplateGenJobOut:
 
 @router.post("/templates/generate", response_model=TemplateGenJobOut, status_code=202)
 def generate_template_from_pdf(
-    payload: TemplateGenJobCreate,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    file: UploadFile | None = File(None),
+    pdf_url: str | None = Form(None),
+    name: str | None = Form(None),
+    description: str | None = Form(None),
+    idempotency_key: str | None = Form(None),
+    callback_url: str | None = Form(None),
+    payload: TemplateGenJobCreate | None = Body(None),
 ):
     # Idempotency: if caller provided a key, return existing job if present
-    if payload.idempotency_key:
-        existing = db.query(TemplateGenJob).filter(TemplateGenJob.idempotency_key == payload.idempotency_key).first()
+    idem_key = idempotency_key or (payload.idempotency_key if payload else None)
+    if idem_key:
+        existing = db.query(TemplateGenJob).filter(TemplateGenJob.idempotency_key == idem_key).first()
         if existing:
             if existing.status == "queued":
                 background_tasks.add_task(process_template_gen_job, existing.id)
             return _job_out(existing)
 
+    # Determine source URL (from uploaded file or provided URL)
+    final_pdf_url: str | None = None
+    if file is not None:
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in (".pdf", ".jpg", ".jpeg", ".png", ".webp"):
+            # Map common content-types to extensions
+            ct = (file.content_type or "").lower()
+            ext = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(ct, ".pdf")
+        fname = f"tpl_{uuid.uuid4().hex}{ext}"
+        dst = os.path.join("app", "tmp", fname)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, "wb") as out:
+            out.write(file.file.read())
+        # Use file:// absolute path so the worker can read locally
+        final_pdf_url = f"file://{os.path.abspath(dst)}"
+    else:
+        # From multipart field or JSON payload
+        final_pdf_url = pdf_url or (payload.pdf_url if payload else None)
+
+    if not final_pdf_url:
+        raise HTTPException(status_code=400, detail="Provide either file or pdf_url")
+
     job = TemplateGenJob(
-        pdf_url=payload.pdf_url,
-        name=(payload.name or None),
-        description=(payload.description or "")[:500],
-        idempotency_key=(payload.idempotency_key or None),
-        callback_url=(payload.callback_url or None),
+        pdf_url=final_pdf_url,
+        name=((name or (payload.name if payload else None)) or None),
+        description=((description if description is not None else (payload.description if payload else "")) or "")[:500],
+        idempotency_key=(idem_key or None),
+        callback_url=((callback_url if callback_url is not None else (payload.callback_url if payload else None)) or None),
     )
     db.add(job)
     db.commit()
@@ -317,6 +348,21 @@ def update_field(template_id: str, field_id: str, payload: TemplateFieldUpdate, 
     f = db.query(DocumentTemplateField).filter(DocumentTemplateField.id == fld_uuid, DocumentTemplateField.template_id == t.id).first()
     if not f:
         raise HTTPException(status_code=404, detail="Field not found")
+
+    # Rename (ensure unique per template)
+    if payload.name is not None and payload.name != f.name:
+        conflict = (
+            db.query(DocumentTemplateField)
+            .filter(
+                DocumentTemplateField.template_id == t.id,
+                DocumentTemplateField.name == payload.name,
+                DocumentTemplateField.id != f.id,
+            )
+            .first()
+        )
+        if conflict:
+            raise HTTPException(status_code=409, detail="Field name already exists")
+        f.name = payload.name
 
     if payload.label is not None:
         f.label = payload.label
