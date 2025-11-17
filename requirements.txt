@@ -12,3 +12,4 @@ python-jose[cryptography]
 email-validator
 google-genai
 pypdf
+python-multipart
