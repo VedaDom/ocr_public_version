@@ -5,9 +5,11 @@ from pydantic import BaseModel, Field
 
 
 class DocumentCreate(BaseModel):
-    url: str = Field(min_length=1, max_length=1024)
+    url: str | None = Field(default=None, max_length=1024)
     template_id: str | None = None
     reference_id: str | None = Field(default=None, max_length=200)
+    base64_data: str | None = None
+    content_type: str | None = Field(default=None, max_length=100)
 
 
 class DocumentOut(BaseModel):
@@ -16,6 +18,7 @@ class DocumentOut(BaseModel):
     reference_id: str | None
     created_at: datetime
     updated_at: datetime
+    template_name: str | None = None
 
 
 class OcrJobOut(BaseModel):

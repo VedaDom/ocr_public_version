@@ -1,107 +1,286 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OCR Admin</title>
-  <link rel="stylesheet" href="/admin/styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/styles.css?v=2" />
 </head>
+
 <body>
-  <header class="app-header">
-    <h1>OCR Admin</h1>
-    <span class="subtitle">Templates and Fields</span>
-  </header>
-
-  <main class="layout">
-    <section class="sidebar">
-      <div class="card">
-        <h2>Create Template</h2>
-        <form id="create-template-form">
-          <label>
-            <span>Name</span>
-            <input name="name" type="text" placeholder="Marriage Act" required />
-          </label>
-          <label>
-            <span>Description</span>
-            <input name="description" type="text" placeholder="Short description" />
-          </label>
-          <label>
-            <span>Callback URL (optional)</span>
-            <input name="callback_url" type="url" placeholder="https://example.com/callback" />
-          </label>
-          <button type="submit" class="btn primary">Create</button>
-        </form>
+  <div class="app-shell">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo-icon">OCR</div>
       </div>
 
-      <div class="card" id="templates-card">
-        <h2>Templates</h2>
-        <div id="templates-list" class="list"></div>
-      </div>
-    </section>
+      <nav class="nav-menu">
+        <a href="#" class="nav-item active" data-view="templates">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="3" y1="9" x2="21" y2="9"></line>
+            <line x1="9" y1="21" x2="9" y2="9"></line>
+          </svg>
+          Templates
+        </a>
+        <a href="#" class="nav-item" data-view="documents">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect>
+            <line x1="8" y1="9" x2="16" y2="9"></line>
+            <line x1="8" y1="13" x2="16" y2="13"></line>
+            <line x1="8" y1="17" x2="13" y2="17"></line>
+          </svg>
+          Documents
+        </a>
+        
+      </nav>
+    </aside>
 
-    <section class="content">
-      <div class="card" id="template-detail" hidden>
-        <div class="detail-header">
-          <h2 id="tpl-name">Template</h2>
-          <div class="muted" id="tpl-meta"></div>
+    <!-- Main Content Area -->
+    <main class="content">
+      <!-- Templates List View -->
+      <section id="view-templates" class="view-section active">
+        <header class="view-header">
+          <div>
+            <h2>Templates</h2>
+            <p class="subtitle">Manage your OCR extraction templates</p>
+          </div>
+          <button class="btn primary" id="btn-create-template">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            New Template
+          </button>
+        </header>
+
+        <div id="templates-grid" class="grid-layout">
+          <!-- Templates will be injected here -->
         </div>
 
-        <div class="fields-actions">
-          <details>
-            <summary>Add Field</summary>
-            <form id="add-field-form" class="grid">
-              <label>
-                <span>Name</span>
-                <input name="name" type="text" placeholder="spouse1_name" required />
-              </label>
-              <label>
-                <span>Label</span>
-                <input name="label" type="text" placeholder="Spouse 1 Name" required />
-              </label>
-              <label>
-                <span>Type</span>
-                <select name="field_type">
-                  <option value="string">string</option>
-                  <option value="number">number</option>
-                  <option value="boolean">boolean</option>
-                  <option value="date">date</option>
-                </select>
-              </label>
-              <label>
-                <span>Required</span>
-                <select name="required">
-                  <option value="false" selected>No</option>
-                  <option value="true">Yes</option>
-                </select>
-              </label>
-              <label>
-                <span>Description</span>
-                <input name="description" type="text" placeholder="Hints to the model" />
-              </label>
-              <label>
-                <span>Order</span>
-                <input name="order_index" type="number" min="0" step="1" value="0" />
-              </label>
-              <button type="submit" class="btn">Add Field</button>
-            </form>
-          </details>
+        <div id="empty-state-templates" class="empty-state" hidden>
+          <div class="empty-icon">📄</div>
+          <h3>No templates yet</h3>
+          <p>Create your first template to start extracting data.</p>
+        </div>
+      </section>
+
+      <section id="view-documents" class="view-section" hidden>
+        <header class="view-header">
+          <div>
+            <h2>Documents</h2>
+            <p class="subtitle">Browse documents and inspect extracted fields</p>
+          </div>
+        </header>
+
+        <div class="card">
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width: 40px">#</th>
+                  <th>Template</th>
+                  <th>Created At</th>
+                </tr>
+              </thead>
+              <tbody id="documents-tbody">
+              </tbody>
+            </table>
+          </div>
+          <div id="empty-state-documents" class="empty-state-small" hidden>
+            <p>No documents registered yet.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Template Detail View -->
+      <section id="view-template-detail" class="view-section" hidden>
+        <header class="view-header">
+          <div class="header-left">
+            <button class="btn icon-only" id="btn-back-templates" title="Back to Templates">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+            </button>
+            <div>
+              <h2 id="detail-title">Template Name</h2>
+              <div class="meta-badges" id="detail-meta"></div>
+            </div>
+          </div>
+          <div class="header-actions">
+            <button class="btn danger outline" id="btn-delete-template">Delete</button>
+            <button class="btn primary" id="btn-add-field">Add Field</button>
+          </div>
+        </header>
+
+        <div class="card">
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width: 40px">#</th>
+                  <th>Field Name</th>
+                  <th>Label</th>
+                  <th>Type</th>
+                  <th>Required</th>
+                  <th>Description</th>
+                  <th style="width: 100px">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="fields-tbody">
+                <!-- Fields injected here -->
+              </tbody>
+            </table>
+          </div>
+          <div id="empty-state-fields" class="empty-state-small" hidden>
+            <p>No fields defined yet.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings View (Placeholder) -->
+      <section id="view-settings" class="view-section" hidden>
+        <header class="view-header">
+          <h2>Settings</h2>
+        </header>
+        <div class="card">
+          <p class="placeholder-text">Global settings configuration will appear here.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modals -->
+  <dialog id="modal-create-template" class="modal">
+    <form id="form-create-template" method="dialog">
+      <div class="modal-header">
+        <h3>Create New Template</h3>
+        <button type="button" class="btn-close" onclick="this.closest('dialog').close()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="inp-tpl-name">Name</label>
+          <input id="inp-tpl-name" name="name" type="text" placeholder="e.g., Invoice v2" required />
+        </div>
+        <div class="form-group">
+          <label for="inp-tpl-desc">Description</label>
+          <input id="inp-tpl-desc" name="description" type="text" placeholder="Brief description" />
+        </div>
+        <div class="form-group">
+          <label for="inp-tpl-pdf-url">PDF URL</label>
+          <input id="inp-tpl-pdf-url" name="pdf_url" type="url" placeholder="https://example.com/template.pdf" required />
+          <small>Public URL to a sample PDF used to auto-generate fields</small>
+        </div>
+        <div class="form-group">
+          <label for="inp-tpl-required-fields">Required field names (optional)</label>
+          <input id="inp-tpl-required-fields" name="required_field_names" type="text" placeholder="e.g., invoice_number, total_amount" />
+          <small>Comma-separated list of field names that must appear in the generated template</small>
+        </div>
+        <div class="form-group">
+          <label for="inp-tpl-callback">Callback URL</label>
+          <input id="inp-tpl-callback" name="callback_url" type="url" placeholder="https://..." />
+          <small>Optional webhook URL for results</small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" class="btn primary">Create Template</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="modal-field" class="modal">
+    <form id="form-field" method="dialog">
+      <div class="modal-header">
+        <h3 id="modal-field-title">Add Field</h3>
+        <button type="button" class="btn-close" onclick="this.closest('dialog').close()">×</button>
+      </div>
+      <div class="modal-body grid-2">
+        <input type="hidden" name="id" /> <!-- For edits -->
+
+        <div class="form-group span-2">
+          <label>Name (Key)</label>
+          <input name="name" type="text" placeholder="total_amount" required pattern="[a-zA-Z0-9_]+" />
+          <small>Machine readable key (letters, numbers, _)</small>
         </div>
 
-        <h3>Fields</h3>
-        <div id="fields-list" class="vstack"></div>
-      </div>
+        <div class="form-group span-2">
+          <label>Label</label>
+          <input name="label" type="text" placeholder="Total Amount" required />
+        </div>
 
-      <div id="empty-state" class="card center">
-        <p>Select a template to manage its fields.</p>
-      </div>
-    </section>
-  </main>
+        <div class="form-group">
+          <label>Type</label>
+          <select name="field_type">
+            <option value="string">Text (String)</option>
+            <option value="number">Number</option>
+            <option value="boolean">Boolean</option>
+            <option value="date">Date</option>
+          </select>
+        </div>
 
-  <div id="toast" class="toast" hidden></div>
-  <div id="overlay" class="overlay" hidden>
+        <div class="form-group">
+          <label>Order</label>
+          <input name="order_index" type="number" value="0" />
+        </div>
+
+        <div class="form-group span-2">
+          <label class="checkbox-label">
+            <input name="required" type="checkbox" />
+            <span>This field is required</span>
+          </label>
+        </div>
+
+        <div class="form-group span-2">
+          <label>Description</label>
+          <textarea name="description" rows="2" placeholder="Instructions for the AI model..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" class="btn primary">Save Field</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="document-drawer" class="drawer" hidden>
+    <div class="drawer-header">
+      <h3 id="document-drawer-title">Document</h3>
+      <button type="button" class="btn-close" id="btn-close-document-drawer">×</button>
+    </div>
+    <div class="drawer-body">
+      <div id="document-drawer-meta" class="drawer-meta"></div>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Field Name</th>
+              <th>Label</th>
+              <th>Value</th>
+              <th>Confidence</th>
+            </tr>
+          </thead>
+          <tbody id="document-fields-tbody">
+          </tbody>
+        </table>
+      </div>
+      <div id="empty-state-document-fields" class="empty-state-small" hidden>
+        <p>No fields extracted for this document yet.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+  <div id="loading-overlay" class="overlay" hidden>
     <div class="spinner"></div>
   </div>
 
-  <script src="/admin/app.js" type="module"></script>
+  <script src="/admin/app.js?v=3" type="module"></script>
 </body>
+
 </html>

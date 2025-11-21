@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import uuid
+import base64
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form, Body
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.infrastructure.db import get_db
@@ -48,11 +50,14 @@ def register_document(
     url: str | None = Form(None),
     template_id: str | None = Form(None),
     reference_id: str | None = Form(None),
+    file_base64: str | None = Form(None),
+    file_content_type: str | None = Form(None),
     payload: DocumentCreate | None = Body(None),
 ):
 
     # Validate template if provided
     tpl_id = None
+    tpl_name = None
     eff_template_id = template_id or (payload.template_id if payload else None)
     if eff_template_id:
         try:
@@ -63,6 +68,7 @@ def register_document(
         if not tpl:
             raise HTTPException(status_code=404, detail="Template not found")
         tpl_id = tpl.id
+        tpl_name = tpl.name
 
     # Create document (single)
     eff_reference = (reference_id if reference_id is not None else (payload.reference_id if payload else None))
@@ -70,9 +76,11 @@ def register_document(
         existing = db.query(Document).filter(Document.reference_id == eff_reference).first()
         if existing:
             raise HTTPException(status_code=409, detail="reference_id already exists")
-    # Determine source URL from uploaded file or provided URL/body
+    # Determine source URL from uploaded file, base64 content, or provided URL/body
     import os
     eff_url: str | None = url or (payload.url if payload else None)
+
+    # 1) Uploaded file takes precedence
     if file is not None:
         ext = os.path.splitext(file.filename or "")[1].lower()
         if ext not in (".pdf", ".jpg", ".jpeg", ".png", ".webp"):
@@ -84,8 +92,40 @@ def register_document(
         with open(dst, "wb") as out:
             out.write(file.file.read())
         eff_url = f"file://{os.path.abspath(dst)}"
+    else:
+        # 2) Base64-encoded content (form field or JSON payload)
+        raw_b64: str | None = file_base64 or (payload.base64_data if payload else None)
+        if raw_b64:
+            b64_str = raw_b64.strip()
+            # Support optional data: URL prefix
+            if b64_str.startswith("data:"):
+                parts = b64_str.split(",", 1)
+                if len(parts) == 2:
+                    b64_str = parts[1]
+            try:
+                binary = base64.b64decode(b64_str, validate=True)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid base64 data for document")
+
+            ct_hint = file_content_type or (payload.content_type if payload else None)
+            ct = (ct_hint or "application/pdf").lower()
+            ext_map = {
+                "application/pdf": ".pdf",
+                "image/jpeg": ".jpg",
+                "image/png": ".png",
+                "image/webp": ".webp",
+            }
+            ext = ext_map.get(ct, ".pdf")
+
+            fname = f"doc_{uuid.uuid4().hex}{ext}"
+            dst = os.path.join("app", "tmp", fname)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst, "wb") as out:
+                out.write(binary)
+            eff_url = f"file://{os.path.abspath(dst)}"
+
     if not eff_url:
-        raise HTTPException(status_code=400, detail="Provide either file or url")
+        raise HTTPException(status_code=400, detail="Provide either file, base64_data, or url")
 
     doc = Document(
         url=eff_url,
@@ -113,6 +153,7 @@ def register_document(
                 reference_id=doc.reference_id,
                 created_at=doc.created_at,
                 updated_at=doc.updated_at,
+                template_name=tpl_name,
             )
         ],
         jobs=[
@@ -134,16 +175,27 @@ def register_document(
 
 @router.get("/documents", response_model=list[DocumentOut])
 def list_documents(db: Session = Depends(get_db)):
-    rows = db.query(Document).order_by(Document.created_at.desc()).all()
+    rows = (
+        db.query(
+            Document,
+            func.max(DocumentTemplate.name).label("template_name"),
+        )
+        .outerjoin(OcrJob, OcrJob.document_id == Document.id)
+        .outerjoin(DocumentTemplate, DocumentTemplate.id == OcrJob.template_id)
+        .group_by(Document.id)
+        .order_by(Document.created_at.desc())
+        .all()
+    )
     return [
         DocumentOut(
-            id=str(d.id),
-            url=d.url,
-            reference_id=d.reference_id,
-            created_at=d.created_at,
-            updated_at=d.updated_at,
+            id=str(doc.id),
+            url=doc.url,
+            reference_id=doc.reference_id,
+            created_at=doc.created_at,
+            updated_at=doc.updated_at,
+            template_name=template_name,
         )
-        for d in rows
+        for doc, template_name in rows
     ]
 
 
@@ -215,15 +267,28 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
 
 @router.get("/documents/by_ref/{reference_id}", response_model=DocumentOut)
 def get_document_by_reference(reference_id: str, db: Session = Depends(get_db)):
-    doc = db.query(Document).filter(Document.reference_id == reference_id).first()
-    if not doc:
+    row = (
+        db.query(
+            Document,
+            func.max(DocumentTemplate.name).label("template_name"),
+        )
+        .outerjoin(OcrJob, OcrJob.document_id == Document.id)
+        .outerjoin(DocumentTemplate, DocumentTemplate.id == OcrJob.template_id)
+        .filter(Document.reference_id == reference_id)
+        .group_by(Document.id)
+        .first()
+    )
+    if not row:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    doc, template_name = row
     return DocumentOut(
         id=str(doc.id),
         url=doc.url,
         reference_id=doc.reference_id,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
+        template_name=template_name,
     )
 
 

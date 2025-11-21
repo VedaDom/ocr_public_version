@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,8 @@ class TemplateGenJob(Base):
     description: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     callback_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    required_field_names: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
     status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)
     error_message: Mapped[str] = mapped_column(String(2000), default="", nullable=False)

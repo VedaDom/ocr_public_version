@@ -23,6 +23,7 @@ class TemplateOut(BaseModel):
     callback_url: str | None
     created_at: datetime
     updated_at: datetime
+    field_count: int = 0
 
 
 class TemplateFieldCreate(BaseModel):
@@ -66,6 +67,7 @@ class TemplateGenJobCreate(BaseModel):
     description: str | None = Field(default="", max_length=500)
     idempotency_key: str | None = Field(default=None, max_length=128)
     callback_url: str | None = Field(default=None, max_length=1024)
+    required_field_names: list[str] | None = None
 
 
 class TemplateGenJobOut(BaseModel):
@@ -80,3 +82,4 @@ class TemplateGenJobOut(BaseModel):
     updated_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    required_field_names: list[str] | None = None

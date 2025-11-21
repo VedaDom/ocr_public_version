@@ -46,7 +46,11 @@ def process_template_gen_job(job_id: uuid.UUID) -> None:
                     resp.raise_for_status()
                     pdf_bytes = resp.content
             gen = TemplateGenerator()
-            result = gen.generate(pdf_bytes=pdf_bytes, content_type="application/pdf")
+            result = gen.generate(
+                pdf_bytes=pdf_bytes,
+                content_type="application/pdf",
+                required_field_names=job.required_field_names,
+            )
 
             # Determine template name
             base_name = (job.name or "Generated Template").strip()[:200] or "Generated Template"

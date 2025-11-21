@@ -35,17 +35,39 @@ def _parse_uuid(id_str: str, what: str) -> uuid.UUID:
 
 @router.get("/templates", response_model=list[TemplateOut])
 def list_templates(db: Session = Depends(get_db)):
-    rows = db.query(DocumentTemplate).order_by(DocumentTemplate.name.asc()).all()
+    rows = (
+        db.query(
+            DocumentTemplate.id,
+            DocumentTemplate.name,
+            DocumentTemplate.description,
+            DocumentTemplate.callback_url,
+            DocumentTemplate.created_at,
+            DocumentTemplate.updated_at,
+            func.count(DocumentTemplateField.id).label("field_count"),
+        )
+        .outerjoin(DocumentTemplateField, DocumentTemplateField.template_id == DocumentTemplate.id)
+        .group_by(
+            DocumentTemplate.id,
+            DocumentTemplate.name,
+            DocumentTemplate.description,
+            DocumentTemplate.callback_url,
+            DocumentTemplate.created_at,
+            DocumentTemplate.updated_at,
+        )
+        .order_by(DocumentTemplate.name.asc())
+        .all()
+    )
     out: list[TemplateOut] = []
-    for t in rows:
+    for row in rows:
         out.append(
             TemplateOut(
-                id=str(t.id),
-                name=t.name,
-                description=t.description,
-                callback_url=t.callback_url,
-                created_at=t.created_at,
-                updated_at=t.updated_at,
+                id=str(row.id),
+                name=row.name,
+                description=row.description,
+                callback_url=row.callback_url,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                field_count=int(row.field_count or 0),
             )
         )
     return out
@@ -70,6 +92,7 @@ def create_template(payload: TemplateCreate, db: Session = Depends(get_db)):
         callback_url=t.callback_url,
         created_at=t.created_at,
         updated_at=t.updated_at,
+        field_count=0,
     )
 
 
@@ -86,6 +109,7 @@ def _job_out(job: TemplateGenJob) -> TemplateGenJobOut:
         updated_at=job.updated_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
+        required_field_names=job.required_field_names or None,
     )
 
 
@@ -100,6 +124,7 @@ def generate_template_from_pdf(
     description: str | None = Form(None),
     idempotency_key: str | None = Form(None),
     callback_url: str | None = Form(None),
+    required_field_names: str | None = Form(None),
     payload: TemplateGenJobCreate | None = Body(None),
 ):
     # Idempotency: if caller provided a key, return existing job if present
@@ -133,12 +158,39 @@ def generate_template_from_pdf(
     if not final_pdf_url:
         raise HTTPException(status_code=400, detail="Provide either file or pdf_url")
 
+    # Determine required field names (can come from form or JSON payload)
+    req_names: list[str] | None = None
+    raw_req = (required_field_names or "").strip()
+    if raw_req:
+        parts = [p.strip() for p in raw_req.split(",") if p.strip()]
+        if parts:
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for p in parts:
+                if p not in seen:
+                    seen.add(p)
+                    deduped.append(p[:100])
+            if deduped:
+                req_names = deduped
+    elif payload and payload.required_field_names:
+        cleaned: list[str] = []
+        seen2: set[str] = set()
+        for n in payload.required_field_names:
+            n_str = (n or "").strip()
+            if not n_str or n_str in seen2:
+                continue
+            seen2.add(n_str)
+            cleaned.append(n_str[:100])
+        if cleaned:
+            req_names = cleaned
+
     job = TemplateGenJob(
         pdf_url=final_pdf_url,
         name=((name or (payload.name if payload else None)) or None),
         description=((description if description is not None else (payload.description if payload else "")) or "")[:500],
         idempotency_key=(idem_key or None),
         callback_url=((callback_url if callback_url is not None else (payload.callback_url if payload else None)) or None),
+        required_field_names=req_names,
     )
     db.add(job)
     db.commit()
@@ -228,6 +280,10 @@ def delete_template(template_id: str, db: Session = Depends(get_db)):
     t = db.query(DocumentTemplate).filter(DocumentTemplate.id == tpl_uuid).first()
     if not t:
         raise HTTPException(status_code=404, detail="Template not found")
+
+    db.query(TemplateGenJob).filter(TemplateGenJob.template_id == t.id).delete(
+        synchronize_session=False,
+    )
 
     db.delete(t)
     db.commit()
